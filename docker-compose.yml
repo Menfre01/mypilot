@@ -1,0 +1,10 @@
+services:
+  mypilot:
+    build: .
+    ports:
+      - "16321:16321"
+    environment:
+      - LAN_IP=${LAN_IP:-}
+    volumes:
+      - ~/.mypilot:/home/node/.mypilot
+    restart: unless-stopped

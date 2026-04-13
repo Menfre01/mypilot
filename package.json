@@ -1,0 +1,38 @@
+{
+  "name": "mypilot",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Gateway server for MyPilot - remote interaction console for Claude Code",
+  "bin": {
+    "mypilot": "./dist/backend/cli.js"
+  },
+  "scripts": {
+    "dev": "npm run dev:backend",
+    "dev:backend": "tsx src/backend/cli.ts gateway",
+    "stop:dev": "kill $(cat ~/.mypilot/gateway.pid) 2>/dev/null; rm -f ~/.mypilot/gateway.pid; echo 'Gateway stopped'",
+    "restart:dev": "npm run stop:dev && npm run dev",
+    "build": "npm run build:backend",
+    "build:backend": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "docker:build": "docker compose build",
+    "docker:up": "LAN_IP=${LAN_IP:-$(node -e \"const{networkInterfaces}=require('os');for(const[,a]of Object.entries(networkInterfaces()))for(const b of a)if(b.family==='IPv4'&&!b.internal&&b.address.startsWith('192.168.')){process.stdout.write(b.address);process.exit()}\")} docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:restart": "npm run docker:down && npm run docker:build && npm run docker:up"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@types/ws": "^8.18.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  }
+}
