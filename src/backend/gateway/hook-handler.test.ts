@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { randomBytes } from 'node:crypto';
 import { HookHandler } from './hook-handler.js';
 import { SessionStore } from './session-store.js';
 import { PendingStore } from './pending-store.js';
@@ -32,7 +33,7 @@ describe('HookHandler', () => {
   beforeEach(() => {
     sessionStore = new SessionStore();
     pendingStore = new PendingStore();
-    wsBus = new WsBus();
+    wsBus = new WsBus(randomBytes(32));
     handler = new HookHandler(sessionStore, pendingStore, wsBus);
   });
 

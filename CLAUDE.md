@@ -35,3 +35,7 @@ npm run docker:down    # Stop Docker container
 - `src/shared/events.ts` — Event classification
 
 Data dir: `~/.mypilot/`
+
+### 参考资料
+
+- Claude Code Hooks 文档: https://code.claude.com/docs/en/hooks

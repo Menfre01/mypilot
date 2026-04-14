@@ -14,8 +14,10 @@ vi.mock("./gateway/server.js", () => ({
   })),
 }));
 
+const MOCK_KEY = Buffer.from("a".repeat(32), "utf-8");
+
 vi.mock("./gateway/token-store.js", () => ({
-  getOrCreateToken: vi.fn(() => "mock-token-123"),
+  getOrCreateKey: vi.fn(() => MOCK_KEY),
   detectLanIP: vi.fn(() => "192.168.1.100"),
 }));
 
@@ -138,7 +140,7 @@ describe("runCli", () => {
   // ── gateway command ──
 
   describe("gateway", () => {
-    it("starts server with port, logDir and token", async () => {
+    it("starts server with port, logDir, key", async () => {
       const { createServer } = await import("./gateway/server.js");
 
       await runCli(makeArgv("gateway"), testPidDir, testPidPath);
@@ -146,16 +148,16 @@ describe("runCli", () => {
       expect(createServer).toHaveBeenCalledWith(
         DEFAULT_PORT,
         join(testPidDir, "logs"),
-        "mock-token-123",
+        MOCK_KEY,
       );
     });
 
-    it("gets or creates token and detects LAN IP", async () => {
-      const { getOrCreateToken, detectLanIP } = await import("./gateway/token-store.js");
+    it("gets or creates key and detects LAN IP", async () => {
+      const { getOrCreateKey, detectLanIP } = await import("./gateway/token-store.js");
 
       await runCli(makeArgv("gateway"), testPidDir, testPidPath);
 
-      expect(getOrCreateToken).toHaveBeenCalledWith(testPidDir);
+      expect(getOrCreateKey).toHaveBeenCalledWith(testPidDir);
       expect(detectLanIP).toHaveBeenCalled();
     });
 
@@ -164,7 +166,7 @@ describe("runCli", () => {
 
       await runCli(makeArgv("gateway"), testPidDir, testPidPath);
 
-      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, "mock-token-123");
+      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY);
     });
 
     it("writes PID file on start", async () => {
@@ -307,19 +309,19 @@ describe("runCli", () => {
       expect(output).toMatch(/not been started/i);
     });
 
-    it("displays pairing info when token exists", async () => {
+    it("displays pairing info when key exists", async () => {
       mkdirSync(testPidDir, { recursive: true });
-      writeFileSync(join(testPidDir, "token"), "test-token-abc", "utf-8");
+      writeFileSync(join(testPidDir, "key"), MOCK_KEY);
 
       await runCli(makeArgv("pair-info"), testPidDir, testPidPath);
 
       const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, "test-token-abc");
+      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY);
     });
 
     it("shows pairing header in output", async () => {
       mkdirSync(testPidDir, { recursive: true });
-      writeFileSync(join(testPidDir, "token"), "test-token-abc", "utf-8");
+      writeFileSync(join(testPidDir, "key"), MOCK_KEY);
 
       await runCli(makeArgv("pair-info"), testPidDir, testPidPath);
 
@@ -329,32 +331,32 @@ describe("runCli", () => {
 
     it("uses domain with port 443 when domain provided without port", async () => {
       mkdirSync(testPidDir, { recursive: true });
-      writeFileSync(join(testPidDir, "token"), "test-token-abc", "utf-8");
+      writeFileSync(join(testPidDir, "key"), MOCK_KEY);
 
       await runCli(makeArgv("pair-info", "tunnel.example.com"), testPidDir, testPidPath);
 
       const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      expect(displayConnectionInfo).toHaveBeenCalledWith("tunnel.example.com", 443, "test-token-abc");
+      expect(displayConnectionInfo).toHaveBeenCalledWith("tunnel.example.com", 443, MOCK_KEY);
     });
 
     it("parses host:port when domain includes port", async () => {
       mkdirSync(testPidDir, { recursive: true });
-      writeFileSync(join(testPidDir, "token"), "test-token-abc", "utf-8");
+      writeFileSync(join(testPidDir, "key"), MOCK_KEY);
 
       await runCli(makeArgv("pair-info", "tunnel.example.com:8080"), testPidDir, testPidPath);
 
       const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      expect(displayConnectionInfo).toHaveBeenCalledWith("tunnel.example.com", 8080, "test-token-abc");
+      expect(displayConnectionInfo).toHaveBeenCalledWith("tunnel.example.com", 8080, MOCK_KEY);
     });
 
     it("uses LAN IP when domain is not provided", async () => {
       mkdirSync(testPidDir, { recursive: true });
-      writeFileSync(join(testPidDir, "token"), "test-token-abc", "utf-8");
+      writeFileSync(join(testPidDir, "key"), MOCK_KEY);
 
       await runCli(makeArgv("pair-info"), testPidDir, testPidPath);
 
       const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, "test-token-abc");
+      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY);
     });
   });
 
@@ -396,16 +398,17 @@ describe("runCli", () => {
   // ── start command ──
 
   describe("start", () => {
-    let killSpy: ReturnType<typeof vi.spyOn>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let killSpy: any;
 
     beforeEach(() => {
       // Mock process.kill so fake PID 12345 appears alive
       const origKill = process.kill.bind(process);
-      killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number, signal?: string | number) => {
+      killSpy = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
         if (pid === 12345 && signal === 0) return true; // fake child is alive
         if (pid === 12345 && typeof signal === "string") return true;
         return origKill(pid, signal as any);
-      });
+      }) as typeof process.kill);
     });
 
     afterEach(() => {

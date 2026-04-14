@@ -4,10 +4,16 @@
 export interface PairingInfo {
   h: string; // host (LAN IP or domain for NAT traversal)
   p: number; // port
-  t: string; // token
+  k: string; // base64-encoded 32-byte AES-256 key (used for both auth and encryption)
 }
 
-/** Response from GET /pair?token=X when valid. */
+/** Encrypted message envelope for WebSocket communication. */
+export interface EncryptedEnvelope {
+  iv: string;   // base64-encoded 12-byte IV
+  data: string; // base64-encoded (ciphertext + 16-byte GCM auth tag)
+}
+
+/** Response from GET /pair?key=X when valid. */
 export interface PairResponse {
   ok: true;
   host: string;

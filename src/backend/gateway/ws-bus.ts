@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server, IncomingMessage } from 'node:http';
-import type { GatewayMessage, ClientMessage, SessionInfo, GatewayMode, PendingInteraction } from '../../shared/protocol.js';
+import type { GatewayMessage, ClientMessage, SessionInfo, GatewayMode, PendingInteraction, EncryptedEnvelope } from '../../shared/protocol.js';
+import { encrypt, decrypt } from './crypto.js';
 
 export type MessageHandler = (message: ClientMessage) => void;
 export type DisconnectHandler = () => void;
@@ -12,6 +13,7 @@ const MAX_OFFLINE_QUEUE = 200;
 export class WsBus {
   private wss: WebSocketServer | null = null;
   private client: WebSocket | null = null;
+  private key: Buffer;
   private messageHandlers: MessageHandler[] = [];
   private disconnectHandlers: DisconnectHandler[] = [];
   private connectHandlers: ConnectHandler[] = [];
@@ -19,14 +21,19 @@ export class WsBus {
   private offlineQueue: string[] = [];
   private aliveSockets = new WeakSet<WebSocket>();
 
-  attach(httpServer: Server, token: string): void {
+  constructor(key: Buffer) {
+    this.key = key;
+  }
+
+  attach(httpServer: Server): void {
+    const keyB64 = this.key.toString('base64');
     this.wss = new WebSocketServer({
       server: httpServer,
       path: '/ws-gateway',
       verifyClient: (info: { req: IncomingMessage }, callback: (res: boolean) => void) => {
         const url = new URL(info.req.url ?? '/', `http://localhost`);
-        const clientToken = url.searchParams.get('token');
-        callback(clientToken === token);
+        const clientKey = url.searchParams.get('key');
+        callback(clientKey === keyB64);
       },
     });
 
@@ -50,12 +57,13 @@ export class WsBus {
 
       ws.on('message', (data) => {
         try {
-          const message = JSON.parse(data.toString()) as ClientMessage;
+          const raw = data.toString();
+          const message: ClientMessage = JSON.parse(decrypt(this.key, JSON.parse(raw) as EncryptedEnvelope));
           for (const handler of this.messageHandlers) {
             handler(message);
           }
         } catch {
-          // Ignore malformed messages
+          // Ignore malformed or unauthenticated messages
         }
       });
 
@@ -76,7 +84,7 @@ export class WsBus {
   }
 
   broadcast(message: GatewayMessage): void {
-    const raw = JSON.stringify(message);
+    const raw = encrypt(this.key, JSON.stringify(message));
     if (this.client && this.client.readyState === WebSocket.OPEN) {
       this._send(this.client, raw);
     } else {
@@ -180,13 +188,4 @@ export class WsBus {
     }
   }
 
-  // ── Offline queue ──
-
-  private _flushQueue(ws: WebSocket): void {
-    const queue = this.offlineQueue;
-    this.offlineQueue = [];
-    for (const raw of queue) {
-      this._send(ws, raw);
-    }
-  }
 }

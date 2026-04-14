@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createServer } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { WsBus } from './ws-bus.js';
 import type { SessionInfo, GatewayMessage, ClientMessage } from '../../shared/protocol.js';
-import { waitForOpen, waitForMessage, waitForClose, collectMessages } from './ws-test-helpers.js';
+import { waitForOpen, waitForMessage, waitForClose, collectMessages, encSend } from './ws-test-helpers.js';
 
-const TEST_TOKEN = 'test-token-12345';
+const TEST_KEY = randomBytes(32);
+const TEST_KEY_B64 = TEST_KEY.toString('base64');
 
 describe('WsBus', () => {
   let httpServer: ReturnType<typeof createServer>;
@@ -16,7 +18,7 @@ describe('WsBus', () => {
     httpServer = createServer();
     await new Promise<void>((resolve) => httpServer.listen(0, resolve));
     port = (httpServer.address() as any).port;
-    bus = new WsBus();
+    bus = new WsBus(TEST_KEY);
   });
 
   afterEach(async () => {
@@ -32,10 +34,10 @@ describe('WsBus', () => {
     bus.onConnect(() => {
       bus.sendSessionList(sessions, 'bystander');
     });
-    bus.attach(httpServer, TEST_TOKEN);
+    bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-    const msg = await waitForMessage(ws);
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const msg = await waitForMessage(ws, TEST_KEY);
     const parsed = JSON.parse(msg);
     expect(parsed).toEqual({
       type: 'connected',
@@ -49,8 +51,8 @@ describe('WsBus', () => {
     await waitForClose(ws);
   });
 
-  it('rejects connection without token', async () => {
-    bus.attach(httpServer, TEST_TOKEN);
+  it('rejects connection without key', async () => {
+    bus.attach(httpServer);
 
     const ws = new WebSocket(`ws://localhost:${port}/ws-gateway`);
     await new Promise<void>((resolve) => {
@@ -60,10 +62,11 @@ describe('WsBus', () => {
     expect(ws.readyState).toBe(ws.CLOSED);
   });
 
-  it('rejects connection with wrong token', async () => {
-    bus.attach(httpServer, TEST_TOKEN);
+  it('rejects connection with wrong key', async () => {
+    bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=wrong-token`);
+    const wrongKey = randomBytes(32).toString('base64');
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${wrongKey}`);
     await new Promise<void>((resolve) => {
       ws.on('error', () => {});
       ws.on('close', () => resolve());
@@ -77,14 +80,14 @@ describe('WsBus', () => {
       { id: 's2', color: '#a6e3a1', colorIndex: 1, startedAt: 2000 },
     ];
 
-    bus.attach(httpServer, TEST_TOKEN);
+    bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
     await waitForOpen(ws);
 
     bus.sendSessionList(sessions, 'takeover');
 
-    const msg = await waitForMessage(ws);
+    const msg = await waitForMessage(ws, TEST_KEY);
     const parsed = JSON.parse(msg);
     expect(parsed).toEqual({
       type: 'connected',
@@ -105,14 +108,14 @@ describe('WsBus', () => {
       event: { session_id: 's1', foo: 'bar' },
     };
 
-    bus.attach(httpServer, TEST_TOKEN);
+    bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
     await waitForOpen(ws);
 
     bus.broadcast(message);
 
-    const msg = await waitForMessage(ws);
+    const msg = await waitForMessage(ws, TEST_KEY);
     expect(JSON.parse(msg)).toEqual(message);
 
     ws.close();
@@ -120,7 +123,7 @@ describe('WsBus', () => {
   });
 
   it('broadcast is no-op when no client', () => {
-    bus.attach(httpServer, TEST_TOKEN);
+    bus.attach(httpServer);
     const message: GatewayMessage = { type: 'mode_changed', mode: 'takeover' };
     expect(() => bus.broadcast(message)).not.toThrow();
   });
@@ -129,13 +132,13 @@ describe('WsBus', () => {
     const received: ClientMessage[] = [];
     bus.onMessage((msg) => received.push(msg));
 
-    bus.attach(httpServer, TEST_TOKEN);
+    bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
     await waitForOpen(ws);
 
     const clientMsg: ClientMessage = { type: 'takeover' };
-    ws.send(JSON.stringify(clientMsg));
+    encSend(ws, TEST_KEY, clientMsg);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -150,9 +153,9 @@ describe('WsBus', () => {
     let disconnected = false;
     bus.onDisconnect(() => { disconnected = true; });
 
-    bus.attach(httpServer, TEST_TOKEN);
+    bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
     await waitForOpen(ws);
 
     ws.close();
@@ -163,9 +166,9 @@ describe('WsBus', () => {
   });
 
   it('disconnect() closes client connection', async () => {
-    bus.attach(httpServer, TEST_TOKEN);
+    bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
     await waitForOpen(ws);
 
     expect(bus.hasClient()).toBe(true);
@@ -179,10 +182,10 @@ describe('WsBus', () => {
   it('hasClient returns correct state', async () => {
     expect(bus.hasClient()).toBe(false);
 
-    bus.attach(httpServer, TEST_TOKEN);
+    bus.attach(httpServer);
     expect(bus.hasClient()).toBe(false);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
     await waitForOpen(ws);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -197,7 +200,7 @@ describe('WsBus', () => {
 
   describe('offline message queue', () => {
     it('sendSessionList clears offline queue — recentEvents is authoritative', async () => {
-      bus.attach(httpServer, TEST_TOKEN);
+      bus.attach(httpServer);
 
       // Queue messages while offline
       bus.broadcast({ type: 'mode_changed', mode: 'takeover' });
@@ -209,8 +212,8 @@ describe('WsBus', () => {
         bus.sendSessionList([], 'bystander', []);
       });
 
-      const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-      const messagesPromise = collectMessages(ws, 1);
+      const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+      const messagesPromise = collectMessages(ws, 1, 3000, TEST_KEY);
 
       await waitForOpen(ws);
       const messages = await messagesPromise;
@@ -224,13 +227,13 @@ describe('WsBus', () => {
     });
 
     it('onConnect handler delivers its messages on reconnect', async () => {
-      bus.attach(httpServer, TEST_TOKEN);
+      bus.attach(httpServer);
 
       const connectMsg: GatewayMessage = { type: 'mode_changed', mode: 'bystander' };
       bus.onConnect(() => bus.broadcast(connectMsg));
 
       // Connect and disconnect
-      const ws1 = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
+      const ws1 = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
       await waitForOpen(ws1);
       ws1.close();
       await waitForClose(ws1);
@@ -242,8 +245,8 @@ describe('WsBus', () => {
 
       // Reconnect — onConnect fires, its message is delivered;
       // queued message was superseded by the connect handler.
-      const ws2 = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-      const messagesPromise = collectMessages(ws2, 1);
+      const ws2 = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+      const messagesPromise = collectMessages(ws2, 1, 3000, TEST_KEY);
 
       await waitForOpen(ws2);
       const messages = await messagesPromise;
@@ -256,7 +259,7 @@ describe('WsBus', () => {
     });
 
     it('handles broadcast when no client without throw', () => {
-      bus.attach(httpServer, TEST_TOKEN);
+      bus.attach(httpServer);
 
       // Should not throw, should queue
       expect(() => {
@@ -267,24 +270,20 @@ describe('WsBus', () => {
 
   describe('heartbeat', () => {
     it('connection stays alive — heartbeat pongs keep socket open', async () => {
-      // This verifies the heartbeat mechanism doesn't break normal connections.
-      // Ping/pong is handled automatically by the ws protocol layer.
-      bus.attach(httpServer, TEST_TOKEN);
+      bus.attach(httpServer);
 
-      const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
+      const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
       await waitForOpen(ws);
 
-      // Verify connection is stable after setup
       expect(bus.hasClient()).toBe(true);
       expect(ws.readyState).toBe(ws.OPEN);
 
       // Send and receive a message to confirm bidirectional communication
       const message: GatewayMessage = { type: 'mode_changed', mode: 'takeover' };
       bus.broadcast(message);
-      const msg = await waitForMessage(ws);
+      const msg = await waitForMessage(ws, TEST_KEY);
       expect(JSON.parse(msg)).toEqual(message);
 
-      // Connection should still be alive
       expect(bus.hasClient()).toBe(true);
 
       ws.close();
@@ -292,11 +291,9 @@ describe('WsBus', () => {
     });
 
     it('terminates connection that fails pong response', async () => {
-      // Verify that the heartbeat timer is created and cleaned up
-      // by checking the bus state after a connect/disconnect cycle.
-      bus.attach(httpServer, TEST_TOKEN);
+      bus.attach(httpServer);
 
-      const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
+      const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
       await waitForOpen(ws);
       expect(bus.hasClient()).toBe(true);
 

@@ -11,12 +11,13 @@ export interface GatewayServer {
   stop(): Promise<void>;
 }
 
-export function createServer(port: number, logDir: string, token: string): GatewayServer {
+export function createServer(port: number, logDir: string, key: Buffer): GatewayServer {
   const sessionStore = new SessionStore();
   const pendingStore = new PendingStore();
-  const wsBus = new WsBus();
+  const wsBus = new WsBus(key);
   const eventLogger = new EventLogger(logDir);
   const hookHandler = new HookHandler(sessionStore, pendingStore, wsBus, eventLogger);
+  const keyB64 = key.toString('base64');
 
   let httpServer: Server;
 
@@ -29,17 +30,15 @@ export function createServer(port: number, logDir: string, token: string): Gatew
     });
   }
 
-  function corsHeaders(): Record<string, string> {
-    return {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    };
-  }
+  const CORS_HEADERS: Record<string, string> = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  };
 
   function sendJSON(res: ServerResponse, status: number, data: unknown): void {
     const body = JSON.stringify(data);
-    res.writeHead(status, { 'Content-Type': 'application/json', ...corsHeaders() });
+    res.writeHead(status, { 'Content-Type': 'application/json', ...CORS_HEADERS });
     res.end(body);
   }
 
@@ -47,12 +46,11 @@ export function createServer(port: number, logDir: string, token: string): Gatew
     const url = new URL(req.url ?? '/', `http://localhost`);
 
     if (req.method === 'OPTIONS') {
-      res.writeHead(204, corsHeaders());
+      res.writeHead(204, CORS_HEADERS);
       res.end();
       return;
     }
 
-    // POST /hook
     if (req.method === 'POST' && url.pathname === '/hook') {
       try {
         const body = await collectBody(req);
@@ -70,19 +68,17 @@ export function createServer(port: number, logDir: string, token: string): Gatew
       return;
     }
 
-    // GET /pair — validate token and return gateway info
     if (req.method === 'GET' && url.pathname === '/pair') {
-      const pairToken = url.searchParams.get('token');
-      if (!pairToken || pairToken !== token) {
-        sendJSON(res, 403, { error: 'Invalid token' });
+      const pairKey = url.searchParams.get('key');
+      if (!pairKey || pairKey !== keyB64) {
+        sendJSON(res, 403, { error: 'Invalid key' });
         return;
       }
       sendJSON(res, 200, { ok: true, host: url.hostname, port });
       return;
     }
 
-    // 404 for everything else
-    res.writeHead(404, corsHeaders());
+    res.writeHead(404, CORS_HEADERS);
     res.end('Not Found');
   }
 
@@ -113,7 +109,6 @@ export function createServer(port: number, logDir: string, token: string): Gatew
         pendingStore.resolve(message.sessionId, message.eventId, message.response);
         break;
       case 'request_sessions':
-        // Legacy: still supported for older clients.
         broadcastSessionState(message.lastEventSeq);
         break;
     }
@@ -124,11 +119,8 @@ export function createServer(port: number, logDir: string, token: string): Gatew
       httpServer = createHttpServer();
       httpServer.on('request', handleRequest);
 
-      wsBus.attach(httpServer, token);
+      wsBus.attach(httpServer);
       wsBus.onMessage(handleClientMessage);
-      // Do NOT release pending interactions on disconnect.
-      // Blocking must persist until the user responds or exits takeover mode.
-      // The client will re-request pending interactions on reconnect.
       wsBus.onConnect((url) => {
         // Read lastEventSeq from WS URL to send correct events in one shot.
         const seqParam = url.searchParams.get('lastEventSeq');

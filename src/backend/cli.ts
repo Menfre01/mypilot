@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync, realpathSync, openSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import { createServer } from "./gateway/server.js";
-import { getOrCreateToken, detectLanIP } from "./gateway/token-store.js";
+import { getOrCreateKey, detectLanIP } from "./gateway/token-store.js";
 import { displayConnectionInfo } from "./gateway/qr-display.js";
 import { mergeHooksIntoSettings, buildHooksConfig } from "./gateway/hooks-config.js";
 
@@ -54,12 +54,12 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
     process.exit(1);
   }
 
-  // Get or create persistent token
+  // Get or create persistent encryption key
   mkdirSync(pidDir, { recursive: true });
-  const token = getOrCreateToken(pidDir);
+  const key = getOrCreateKey(pidDir);
   const logDir = join(pidDir, "logs");
 
-  const server = createServer(DEFAULT_PORT, logDir, token);
+  const server = createServer(DEFAULT_PORT, logDir, key);
 
   await server.start();
 
@@ -69,7 +69,7 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
   // Display connection info with QR code
   const lanIP = detectLanIP();
   console.log(`Gateway running at http://localhost:${DEFAULT_PORT}`);
-  displayConnectionInfo(lanIP, DEFAULT_PORT, token);
+  displayConnectionInfo(lanIP, DEFAULT_PORT, key);
 
   // Handle SIGINT for graceful shutdown
   process.on("SIGINT", async () => {
@@ -88,13 +88,8 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
 }
 
 function resolveSelfScriptPath(): string {
-  // When running via tsx, process.argv[1] points to tsx's loader.
-  // When running compiled JS, it points to cli.js directly.
-  // We use import.meta.url to get the current file path reliably.
   const url = import.meta.url;
-  // file:// URL to filesystem path
   const filePath = url.startsWith("file://") ? decodeURIComponent(new URL(url).pathname) : url;
-  // On macOS/Linux, pathname starts with /; on Windows it may start with /C:/
   return filePath;
 }
 
@@ -135,11 +130,11 @@ async function startBackground(pidDir: string, pidPath: string): Promise<void> {
     const pid = readPidFile(pidPath);
     if (pid !== null && isProcessAlive(pid)) {
       const lanIP = detectLanIP();
-      const token = getOrCreateToken(pidDir);
+      const key = getOrCreateKey(pidDir);
       console.log(`Gateway started in background (PID ${pid})`);
       console.log(`  URL: http://localhost:${DEFAULT_PORT}`);
       console.log(`  Log: ${logFile}`);
-      displayConnectionInfo(lanIP, DEFAULT_PORT, token);
+      displayConnectionInfo(lanIP, DEFAULT_PORT, key);
       return;
     }
     // Check if child itself crashed before writing PID
@@ -241,7 +236,6 @@ async function checkStatus(pidPath: string): Promise<void> {
 
 function parseDomainArg(domain: string): { host: string; port: number } {
   const colonIdx = domain.lastIndexOf(":");
-  // IPv6 like [::1]:443 or bare [::1]
   if (domain.startsWith("[")) {
     const bracketEnd = domain.indexOf("]");
     if (bracketEnd === -1) return { host: domain, port: 443 };
@@ -263,23 +257,20 @@ function parseDomainArg(domain: string): { host: string; port: number } {
 }
 
 async function showPairInfo(pidDir: string, domainArg?: string): Promise<void> {
-  const tokenPath = join(pidDir, "token");
-
-  if (!existsSync(tokenPath)) {
+  let key: Buffer;
+  try {
+    key = readFileSync(join(pidDir, "key"));
+    if (key.length !== 32) throw new Error("bad length");
+  } catch {
     console.log("Gateway has not been started yet. Run 'mypilot gateway' first.");
     process.exit(1);
   }
 
-  const token = readFileSync(tokenPath, "utf-8").trim();
-  if (!token) {
-    console.log("Token not found. Run 'mypilot gateway' first.");
-    process.exit(1);
-  }
-
-  const host = domainArg ? parseDomainArg(domainArg).host : detectLanIP();
-  const port = domainArg ? parseDomainArg(domainArg).port : DEFAULT_PORT;
+  const { host, port } = domainArg
+    ? parseDomainArg(domainArg)
+    : { host: detectLanIP(), port: DEFAULT_PORT };
   console.log(`MyPilot Gateway pairing info:`);
-  displayConnectionInfo(host, port, token);
+  displayConnectionInfo(host, port, key);
 }
 
 async function initHooks(settingsPath: string): Promise<void> {

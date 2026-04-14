@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { request } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { createServer } from './server.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { waitForOpen, waitForMessage, waitForClose, collectMessages } from './ws-test-helpers.js';
+import { waitForMessage, waitForClose, collectMessages, encSend, decRaw } from './ws-test-helpers.js';
 
 // ── Helpers ──
 
@@ -13,7 +14,8 @@ function randomPort(): number {
   return 20000 + Math.floor(Math.random() * 10000);
 }
 
-const TEST_TOKEN = 'server-test-token';
+const TEST_KEY = randomBytes(32);
+const TEST_KEY_B64 = TEST_KEY.toString('base64');
 
 function httpReq(
   port: number,
@@ -62,7 +64,7 @@ describe('createServer', () => {
   // ── Server lifecycle ──
 
   it('start() listens on configured port', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'GET', '/');
@@ -70,7 +72,7 @@ describe('createServer', () => {
   });
 
   it('stop() closes the server', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
     await server.stop();
 
@@ -78,7 +80,7 @@ describe('createServer', () => {
   });
 
   it('start() and stop() can be called multiple times', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
     await server.stop();
     await server.start();
@@ -88,7 +90,7 @@ describe('createServer', () => {
   // ── POST /hook routing ──
 
   it('POST /hook returns 200 for valid event', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
     const event = JSON.stringify({
@@ -103,7 +105,7 @@ describe('createServer', () => {
   });
 
   it('POST /hook returns 400 for invalid JSON', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'POST', '/hook', 'not json');
@@ -112,7 +114,7 @@ describe('createServer', () => {
   });
 
   it('POST /hook returns 500 for missing session_id', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
     const event = JSON.stringify({ event_name: 'Notification' });
@@ -123,11 +125,11 @@ describe('createServer', () => {
 
   // ── GET /pair ──
 
-  it('GET /pair returns 200 with valid token', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+  it('GET /pair returns 200 with valid key', async () => {
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const res = await httpReq(port, 'GET', `/pair?token=${TEST_TOKEN}`);
+    const res = await httpReq(port, 'GET', `/pair?key=${TEST_KEY_B64}`);
     expect(res.status).toBe(200);
     const parsed = JSON.parse(res.body);
     expect(parsed.ok).toBe(true);
@@ -135,15 +137,15 @@ describe('createServer', () => {
   });
 
   it('GET /pair returns CORS headers', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const res = await httpReq(port, 'GET', `/pair?token=${TEST_TOKEN}`);
+    const res = await httpReq(port, 'GET', `/pair?key=${TEST_KEY_B64}`);
     expect(res.headers['access-control-allow-origin']).toBe('*');
   });
 
   it('OPTIONS returns 204 with CORS headers', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'OPTIONS', '/pair');
@@ -152,16 +154,16 @@ describe('createServer', () => {
     expect(res.headers['access-control-allow-methods']).toBeDefined();
   });
 
-  it('GET /pair returns 403 with invalid token', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+  it('GET /pair returns 403 with invalid key', async () => {
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const res = await httpReq(port, 'GET', '/pair?token=wrong-token');
+    const res = await httpReq(port, 'GET', '/pair?key=wrong-key');
     expect(res.status).toBe(403);
   });
 
-  it('GET /pair returns 403 without token', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+  it('GET /pair returns 403 without key', async () => {
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'GET', '/pair');
@@ -171,7 +173,7 @@ describe('createServer', () => {
   // ── Unknown routes ──
 
   it('GET /unknown returns 404', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'GET', '/unknown');
@@ -179,7 +181,7 @@ describe('createServer', () => {
   });
 
   it('GET / returns 404 (no static file serving)', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'GET', '/');
@@ -188,12 +190,12 @@ describe('createServer', () => {
 
   // ── WebSocket integration ──
 
-  it('client connects via WebSocket with valid token', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+  it('client connects via WebSocket with valid key', async () => {
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-    const msg = await waitForMessage(ws);
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const msg = await waitForMessage(ws, TEST_KEY);
 
     const parsed = JSON.parse(msg);
     expect(parsed.type).toBe('connected');
@@ -204,8 +206,8 @@ describe('createServer', () => {
     await waitForClose(ws);
   });
 
-  it('WebSocket rejects connection without token', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+  it('WebSocket rejects connection without key', async () => {
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
     const ws = new WebSocket(`ws://localhost:${port}/ws-gateway`);
@@ -216,11 +218,11 @@ describe('createServer', () => {
     expect(ws.readyState).toBe(ws.CLOSED);
   });
 
-  it('WebSocket rejects connection with wrong token', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+  it('WebSocket rejects connection with wrong key', async () => {
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=wrong`);
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=wrong`);
     await new Promise<void>((resolve) => {
       ws.on('error', () => {});
       ws.on('close', () => resolve());
@@ -229,11 +231,11 @@ describe('createServer', () => {
   });
 
   it('POST /hook broadcasts event to connected WebSocket client', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-    await waitForMessage(ws); // consume initial connected message
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    await waitForMessage(ws, TEST_KEY); // consume initial connected message
 
     // Post an event and concurrently wait for the WS broadcast
     const event = JSON.stringify({
@@ -243,7 +245,7 @@ describe('createServer', () => {
     });
     const [res, messages] = await Promise.all([
       httpReq(port, 'POST', '/hook', event),
-      collectMessages(ws, 2),
+      collectMessages(ws, 2, 3000, TEST_KEY),
     ]);
 
     expect(res.status).toBe(200);
@@ -259,17 +261,17 @@ describe('createServer', () => {
   });
 
   it('client can switch to takeover mode via WebSocket', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-    await waitForMessage(ws); // consume initial connected message
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    await waitForMessage(ws, TEST_KEY); // consume initial connected message
 
-    // Send takeover message
-    ws.send(JSON.stringify({ type: 'takeover' }));
+    // Send takeover message (encrypted)
+    encSend(ws, TEST_KEY, { type: 'takeover' });
 
     // Should receive mode_changed
-    const msg = await waitForMessage(ws);
+    const msg = await waitForMessage(ws, TEST_KEY);
     const parsed = JSON.parse(msg);
     expect(parsed.type).toBe('mode_changed');
     expect(parsed.mode).toBe('takeover');
@@ -279,15 +281,15 @@ describe('createServer', () => {
   });
 
   it('client can interact to resolve pending event in takeover mode', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-    await waitForMessage(ws); // consume initial connected message
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    await waitForMessage(ws, TEST_KEY); // consume initial connected message
 
-    // Switch to takeover mode
-    ws.send(JSON.stringify({ type: 'takeover' }));
-    const modeMsg = await waitForMessage(ws);
+    // Switch to takeover mode (encrypted)
+    encSend(ws, TEST_KEY, { type: 'takeover' });
+    const modeMsg = await waitForMessage(ws, TEST_KEY);
     expect(JSON.parse(modeMsg).mode).toBe('takeover');
 
     // Post a blocking event (PermissionRequest is user interaction) — it will block on waitForResponse
@@ -298,11 +300,12 @@ describe('createServer', () => {
     });
 
     // Collect WS messages while the HTTP request is pending
-    // (first is session_start for new session, then the event broadcast)
     const messagePromise = new Promise<string>((resolve) => {
       ws.on('message', (data) => {
-        const msg = data.toString();
-        if (JSON.parse(msg).type === 'event') resolve(msg);
+        try {
+          const msg = decRaw(TEST_KEY, data.toString());
+          if (JSON.parse(msg).type === 'event') resolve(msg);
+        } catch { /* ignore */ }
       });
     });
 
@@ -316,13 +319,13 @@ describe('createServer', () => {
     const eventId = parsed.event.event_id;
     expect(eventId).toBeDefined();
 
-    // Resolve the pending event via WS
-    ws.send(JSON.stringify({
+    // Resolve the pending event via WS (encrypted)
+    encSend(ws, TEST_KEY, {
       type: 'interact',
       sessionId: 's1',
       eventId,
       response: { decision: 'allow' },
-    }));
+    });
 
     // Hook should return the response
     const hookRes = await hookPromise;
@@ -335,15 +338,15 @@ describe('createServer', () => {
   });
 
   it('client disconnecting in takeover mode preserves mode', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws1 = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-    await waitForMessage(ws1); // consume initial connected message
+    const ws1 = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    await waitForMessage(ws1, TEST_KEY); // consume initial connected message
 
-    // Switch to takeover
-    ws1.send(JSON.stringify({ type: 'takeover' }));
-    const modeMsg = await waitForMessage(ws1);
+    // Switch to takeover (encrypted)
+    encSend(ws1, TEST_KEY, { type: 'takeover' });
+    const modeMsg = await waitForMessage(ws1, TEST_KEY);
     expect(JSON.parse(modeMsg).mode).toBe('takeover');
 
     // Disconnect client
@@ -351,8 +354,8 @@ describe('createServer', () => {
     await waitForClose(ws1);
 
     // New client connects — mode should still be takeover (global, persists across refresh)
-    const ws2 = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-    const msg = await waitForMessage(ws2);
+    const ws2 = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const msg = await waitForMessage(ws2, TEST_KEY);
     const parsed = JSON.parse(msg);
     expect(parsed.mode).toBe('takeover');
 
@@ -361,11 +364,11 @@ describe('createServer', () => {
   });
 
   it('request_sessions client message sends session list', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-    await waitForMessage(ws); // consume initial connected message
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    await waitForMessage(ws, TEST_KEY); // consume initial connected message
 
     // Register a session by posting a Notification event
     const event = JSON.stringify({
@@ -374,16 +377,16 @@ describe('createServer', () => {
     });
     const [, messages] = await Promise.all([
       httpReq(port, 'POST', '/hook', event),
-      collectMessages(ws, 2),
+      collectMessages(ws, 2, 3000, TEST_KEY),
     ]);
     // First broadcast is session_start (new session auto-registration), then event
     expect(JSON.parse(messages[0]).type).toBe('session_start');
     expect(JSON.parse(messages[1]).type).toBe('event');
 
-    // Request sessions
-    ws.send(JSON.stringify({ type: 'request_sessions' }));
+    // Request sessions (encrypted)
+    encSend(ws, TEST_KEY, { type: 'request_sessions' });
 
-    const msg = await waitForMessage(ws);
+    const msg = await waitForMessage(ws, TEST_KEY);
     const parsed = JSON.parse(msg);
     expect(parsed.type).toBe('connected');
     expect(parsed.sessions.length).toBe(1);
@@ -394,20 +397,20 @@ describe('createServer', () => {
   });
 
   it('release client message switches to bystander mode', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-    await waitForMessage(ws); // consume initial connected message
+    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    await waitForMessage(ws, TEST_KEY); // consume initial connected message
 
-    // Switch to takeover
-    ws.send(JSON.stringify({ type: 'takeover' }));
-    const takeoverMsg = await waitForMessage(ws);
+    // Switch to takeover (encrypted)
+    encSend(ws, TEST_KEY, { type: 'takeover' });
+    const takeoverMsg = await waitForMessage(ws, TEST_KEY);
     expect(JSON.parse(takeoverMsg).mode).toBe('takeover');
 
-    // Switch back to bystander
-    ws.send(JSON.stringify({ type: 'release' }));
-    const releaseMsg = await waitForMessage(ws);
+    // Switch back to bystander (encrypted)
+    encSend(ws, TEST_KEY, { type: 'release' });
+    const releaseMsg = await waitForMessage(ws, TEST_KEY);
     expect(JSON.parse(releaseMsg).type).toBe('mode_changed');
     expect(JSON.parse(releaseMsg).mode).toBe('bystander');
 
@@ -416,15 +419,15 @@ describe('createServer', () => {
   });
 
   it('pending interactions preserved across client disconnect and reconnect', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws1 = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-    await waitForMessage(ws1); // consume initial connected message
+    const ws1 = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    await waitForMessage(ws1, TEST_KEY); // consume initial connected message
 
-    // Switch to takeover mode
-    ws1.send(JSON.stringify({ type: 'takeover' }));
-    const modeMsg = await waitForMessage(ws1);
+    // Switch to takeover mode (encrypted)
+    encSend(ws1, TEST_KEY, { type: 'takeover' });
+    const modeMsg = await waitForMessage(ws1, TEST_KEY);
     expect(JSON.parse(modeMsg).mode).toBe('takeover');
 
     // Post a blocking event — it will stay pending
@@ -436,8 +439,10 @@ describe('createServer', () => {
 
     const eventPromise = new Promise<string>((resolve) => {
       ws1.on('message', (data) => {
-        const msg = data.toString();
-        if (JSON.parse(msg).type === 'event') resolve(msg);
+        try {
+          const msg = decRaw(TEST_KEY, data.toString());
+          if (JSON.parse(msg).type === 'event') resolve(msg);
+        } catch { /* ignore */ }
       });
     });
 
@@ -461,8 +466,8 @@ describe('createServer', () => {
     expect(raceResult).toBe('pending');
 
     // Reconnect with a new client
-    const ws2 = new WebSocket(`ws://localhost:${port}/ws-gateway?token=${TEST_TOKEN}`);
-    const connectMsg = await waitForMessage(ws2);
+    const ws2 = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const connectMsg = await waitForMessage(ws2, TEST_KEY);
     const connectParsed = JSON.parse(connectMsg);
     expect(connectParsed.mode).toBe('takeover');
 
@@ -471,13 +476,13 @@ describe('createServer', () => {
     expect(connectParsed.pendingInteractions[0].sessionId).toBe('s1');
     expect(connectParsed.pendingInteractions[0].eventId).toBe(eventId);
 
-    // Now resolve it via the reconnected client
-    ws2.send(JSON.stringify({
+    // Now resolve it via the reconnected client (encrypted)
+    encSend(ws2, TEST_KEY, {
       type: 'interact',
       sessionId: 's1',
       eventId,
       response: { decision: 'allow' },
-    }));
+    });
 
     // Hook should finally resolve
     const hookRes = await hookPromise;
@@ -489,7 +494,7 @@ describe('createServer', () => {
   });
 
   it('POST /hook returns non-blocking response in bystander mode', async () => {
-    server = createServer(port, logDir, TEST_TOKEN);
+    server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
     // Post a category-1 event (PreToolUse) — in bystander mode should return {} immediately

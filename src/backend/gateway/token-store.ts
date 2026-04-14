@@ -1,27 +1,29 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 
-const TOKEN_FILE = 'token';
+const KEY_FILE = 'key';
+const KEY_LENGTH = 32;
 
 /**
- * Get or create a persistent gateway token.
- * Stored in `{dir}/token` as plain text.
+ * Get or create a persistent AES-256 encryption key.
+ * This key serves as both the connection credential and the encryption key.
+ * Stored in `{dir}/key` as raw 32 bytes.
  */
-export function getOrCreateToken(dir: string): string {
-  const tokenPath = join(dir, TOKEN_FILE);
+export function getOrCreateKey(dir: string): Buffer {
+  const keyPath = join(dir, KEY_FILE);
 
   try {
-    const token = readFileSync(tokenPath, 'utf-8').trim();
-    if (token) return token;
+    const key = readFileSync(keyPath);
+    if (key.length === KEY_LENGTH) return key;
   } catch {
-    // File doesn't exist or unreadable — create new token below
+    // File doesn't exist or unreadable — create new key below
   }
 
-  const token = randomUUID();
-  writeFileSync(tokenPath, token, 'utf-8');
-  return token;
+  const key = randomBytes(KEY_LENGTH);
+  writeFileSync(keyPath, key);
+  return key;
 }
 
 /**

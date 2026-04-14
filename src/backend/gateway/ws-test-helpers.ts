@@ -1,4 +1,5 @@
 import { WebSocket } from 'ws';
+import { encrypt, decrypt } from './crypto.js';
 
 export function waitForOpen(ws: WebSocket): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -7,9 +8,16 @@ export function waitForOpen(ws: WebSocket): Promise<void> {
   });
 }
 
-export function waitForMessage(ws: WebSocket): Promise<string> {
+export function waitForMessage(ws: WebSocket, key?: Buffer): Promise<string> {
   return new Promise((resolve) => {
-    ws.once('message', (data) => resolve(data.toString()));
+    ws.once('message', (data) => {
+      const raw = data.toString();
+      if (key) {
+        resolve(decrypt(key, JSON.parse(raw)));
+      } else {
+        resolve(raw);
+      }
+    });
   });
 }
 
@@ -20,16 +28,29 @@ export function waitForClose(ws: WebSocket): Promise<void> {
   });
 }
 
-export function collectMessages(ws: WebSocket, count: number, timeout = 3000): Promise<string[]> {
+export function collectMessages(ws: WebSocket, count: number, timeout = 3000, key?: Buffer): Promise<string[]> {
   return new Promise((resolve) => {
     const messages: string[] = [];
     const timer = setTimeout(() => resolve(messages), timeout);
     ws.on('message', (data) => {
-      messages.push(data.toString());
+      const raw = data.toString();
+      if (key) {
+        messages.push(decrypt(key, JSON.parse(raw)));
+      } else {
+        messages.push(raw);
+      }
       if (messages.length >= count) {
         clearTimeout(timer);
         resolve(messages);
       }
     });
   });
+}
+
+export function encSend(ws: WebSocket, key: Buffer, obj: unknown): void {
+  ws.send(encrypt(key, JSON.stringify(obj)));
+}
+
+export function decRaw(key: Buffer, raw: string): string {
+  return decrypt(key, JSON.parse(raw));
 }

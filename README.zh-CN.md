@@ -1,78 +1,78 @@
 # MyPilot
 
-English | [中文](README.zh-CN.md)
+[English](README.md) | 中文
 
-Gateway server for [MyPilot](https://apps.apple.com/app/mypilot) — the iOS remote interaction console for Claude Code.
+[Claude Code](https://code.claude.com) iOS 远程交互控制台 [MyPilot](https://apps.apple.com/app/mypilot) 的网关服务。
 
-MyPilot receives Claude Code hook events and streams them to your iPhone via WebSocket. In takeover mode, you can approve/deny permissions, answer questions, and submit prompts from your phone.
+MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你的 iPhone。在接管模式下，你可以直接在手机上审批权限、回答问题、提交 Prompt。
 
-## Requirements
+## 环境要求
 
 - **Node.js** >= 20
-- **iPhone** with the MyPilot app installed ([App Store](https://apps.apple.com/app/mypilot))
+- **iPhone** 并安装 [MyPilot](https://apps.apple.com/app/mypilot) 应用
 - **Claude Code** CLI
 
-## Quick Start
+## 快速开始
 
 ```bash
-# 1. Install
+# 1. 安装
 npm install -g mypilot
 
-# 2. Configure Claude Code hooks
+# 2. 配置 Claude Code Hooks
 mypilot init-hooks
 
-# 3. Start the gateway
+# 3. 启动网关
 mypilot gateway
 ```
 
-Scan the QR code displayed in your terminal with the MyPilot app on your iPhone. The QR code contains the gateway address and encryption key — everything needed for a secure connection.
+用 iPhone 上的 MyPilot 应用扫描终端中显示的二维码。二维码包含网关地址和加密密钥，连接所需的一切信息都在其中。
 
-## Architecture
+## 架构
 
 ```
-Claude Code ──(command hook / curl)──▶ Gateway (:16321) ──(AES-256-GCM WebSocket)──▶ MyPilot iOS App
-                                        ├── POST /hook         ← hook event endpoint
-                                        ├── GET  /pair         ← key validation
-                                        └── WS   /ws-gateway   ← encrypted WebSocket
+Claude Code ──(command hook / curl)──▶ 网关 (:16321) ──(AES-256-GCM WebSocket)──▶ MyPilot iOS App
+                                        ├── POST /hook         ← Hook 事件接口
+                                        ├── GET  /pair         ← 密钥验证
+                                        └── WS   /ws-gateway   ← 加密 WebSocket
 ```
 
-All WebSocket communication between the Gateway and the MyPilot app is encrypted with **AES-256-GCM** using a pre-shared key distributed via QR code. The same key is used for both connection authentication and message encryption — no separate token is needed.
+网关与 MyPilot 应用之间的所有 WebSocket 通信均使用 **AES-256-GCM** 加密，密钥通过二维码分发。同一密钥同时用于连接认证和消息加密，无需单独的 Token。
 
-### Security & Reliability
+### 安全与可靠性
 
-- **AES-256-GCM** encryption with a unique 12-byte IV per message and 16-byte authentication tag
-- **Key-based authentication** — clients authenticate via the pre-shared key in the WebSocket URL
-- **Heartbeat** — 30-second keep-alive pings detect stale connections
-- **Event persistence** — all events are logged to JSONL files (`~/.mypilot/logs/`)
-- **Reconnection recovery** — clients can resume from the last received sequence number after reconnecting, with an offline message buffer of up to 200 events
+- **AES-256-GCM** 加密，每条消息使用独立的 12 字节 IV 和 16 字节认证标签
+- **密钥认证** — 客户端通过 WebSocket URL 中的预共享密钥进行身份验证
+- **心跳检测** — 30 秒间隔的 keep-alive ping 自动检测失效连接
+- **事件持久化** — 所有事件以 JSONL 格式记录到 `~/.mypilot/logs/`
+- **断线恢复** — 客户端重连后可从上次收到的序列号继续接收，离线消息缓冲区最多保存 200 条事件
 
-> **Note:** Currently only **single-device** connections are supported. Multi-device support is in development.
+> **注意：** 目前仅支持**单设备**连接，多设备支持正在开发中。
 
-## CLI Commands
+## CLI 命令
 
 ```bash
-mypilot gateway                        # Start the Gateway server (foreground)
-mypilot start                          # Start Gateway in background
-mypilot stop                           # Stop background Gateway
-mypilot status                         # Check Gateway status (PID, port)
-mypilot init-hooks                     # Configure Claude Code hooks (auto-merge into ~/.claude/settings.json)
-mypilot pair-info                      # Show pairing info (IP + QR code) for reconnecting
-mypilot pair-info my.domain.com        # Use custom domain (NAT traversal), port defaults to 443
-mypilot pair-info my.domain.com:8080   # Custom domain with port
+mypilot gateway                        # 启动网关服务（前台运行）
+mypilot start                          # 后台启动网关
+mypilot stop                           # 停止后台网关
+mypilot status                         # 查看网关状态（PID、端口）
+mypilot init-hooks                     # 配置 Claude Code Hooks（自动合并到 ~/.claude/settings.json）
+mypilot pair-info                      # 显示配对信息（IP + 二维码），用于重新连接
+mypilot pair-info my.domain.com        # 使用自定义域名（NAT 穿透），端口默认 443
+mypilot pair-info my.domain.com:8080   # 自定义域名 + 端口
 ```
 
-## Hook Configuration
+## Hook 配置
 
-Run `mypilot init-hooks` to automatically configure all required hooks. The command:
+运行 `mypilot init-hooks` 自动配置所有必需的 Hooks。该命令会：
 
-- **Preserves** your existing hooks — only adds missing entries
-- **Prompts** for confirmation before modifying `~/.claude/settings.json`
-- Configures both blocking events (with timeout) and informational events
+- **保留**已有的 Hooks 配置，仅添加缺失的条目
+- 修改 `~/.claude/settings.json` 前**提示**确认
+- 同时配置阻塞事件（带超时）和信息事件
 
 <details>
-<summary>Manual configuration (advanced)</summary>
+<summary>手动配置（高级）</summary>
 
-If you prefer to configure hooks manually, add the following to the `hooks` field in `~/.claude/settings.json`:
+如果你希望手动配置 Hooks，请在 `~/.claude/settings.json` 的 `hooks` 字段中添加：
 
 ```json
 {
@@ -159,91 +159,91 @@ If you prefer to configure hooks manually, add the following to the `hooks` fiel
 }
 ```
 
-Events with `timeout: 999999` are blocking events that may need user interaction. See [Hook documentation](https://code.claude.com/docs/en/hooks) for details.
+带有 `timeout: 999999` 的事件为阻塞事件，可能需要用户交互。详见 [Hook 文档](https://code.claude.com/docs/en/hooks)。
 
 </details>
 
-## Working Modes
+## 工作模式
 
-### Bystander Mode (default)
+### 旁观模式（默认）
 
-All hook events are streamed to the app. Events return `{}` immediately — Claude Code is unaffected.
+所有 Hook 事件实时推送到应用，事件立即返回 `{}`，不影响 Claude Code 运行。
 
-### Takeover Mode
+### 接管模式
 
-User interaction events (PermissionRequest, Stop, Elicitation) block until you respond in the MyPilot app. Disconnect automatically returns to bystander mode.
+需要用户交互的事件（PermissionRequest、Stop、Elicitation）会阻塞，等待你在 MyPilot 应用中响应。断开连接后自动恢复为旁观模式。
 
-## Pairing
+## 配对
 
-When you start the gateway, a QR code is displayed in the terminal. Open the MyPilot app and scan it to connect.
+启动网关时，终端会显示二维码。打开 MyPilot 应用扫描即可连接。
 
-If you need to reconnect later (e.g., app was closed), run:
+如需重新连接（例如应用已关闭），运行：
 
 ```bash
 mypilot pair-info
 ```
 
-This displays the pairing QR code and connection details (IP, port, key) without restarting the gateway.
+此命令会显示配对二维码和连接详情（IP、端口、密钥），无需重启网关。
 
-### NAT Traversal
+### NAT 穿透
 
-If your iPhone is not on the same LAN (e.g., using a tunnel service like frp, ngrok, Cloudflare Tunnel), provide your domain:
+如果你的 iPhone 不在同一局域网（例如使用了 frp、ngrok、Cloudflare Tunnel 等隧道服务），请提供你的域名：
 
 ```bash
-mypilot pair-info tunnel.example.com        # defaults to port 443
-mypilot pair-info tunnel.example.com:8080   # custom port
+mypilot pair-info tunnel.example.com        # 默认端口 443
+mypilot pair-info tunnel.example.com:8080   # 自定义端口
 ```
 
-The QR code will use the domain as the host, allowing the iOS app to connect through the tunnel.
+二维码将使用域名作为主机地址，使 iOS 应用能够通过隧道连接。
 
 ## Docker
 
 ```bash
 docker compose build
-# Set LAN_IP to your machine's local IP (the iPhone must be on the same network)
+# 设置 LAN_IP 为本机局域网 IP（iPhone 必须在同一网络）
 LAN_IP=192.168.x.x docker compose up -d
 ```
 
-The `LAN_IP` variable tells the gateway which IP address to advertise in the QR code. Without it, the QR code may contain an incorrect or unreachable address inside Docker.
+`LAN_IP` 变量指定网关在二维码中广播的 IP 地址。若不设置，二维码可能包含 Docker 内部不可达的地址。
 
-## Development
+## 开发
 
 ```bash
 npm install
-npm run dev              # tsx dev server (hot reload)
-npm run stop:dev         # Stop dev server
-npm run restart:dev      # Restart dev server
-npm run build            # tsc compile
-npm run typecheck        # Type check only
-npm test                 # vitest
+npm run dev              # tsx 开发服务器（热重载）
+npm run stop:dev         # 停止开发服务器
+npm run restart:dev      # 重启开发服务器
+npm run build            # tsc 编译
+npm run typecheck        # 仅类型检查
+npm test                 # vitest 测试
 
 # Docker
-npm run docker:build     # Build Docker image
-npm run docker:up        # Start container (auto-detect LAN_IP)
-npm run docker:down      # Stop container
-npm run docker:restart   # Rebuild & restart
+npm run docker:build     # 构建 Docker 镜像
+npm run docker:up        # 启动容器（自动检测 LAN_IP）
+npm run docker:down      # 停止容器
+npm run docker:restart   # 重新构建并重启
 ```
 
-## Troubleshooting
+## 故障排除
 
-| Problem | Solution |
-|---------|----------|
-| Gateway won't start | Check if already running: `mypilot status`. Kill stale process if needed. |
-| QR code won't scan | Ensure iPhone and computer are on the same WiFi network. Try `mypilot pair-info` for a fresh QR code. |
-| App can't connect | Check firewall settings. Port 16321 must be open on your machine. |
-| Hooks not firing | Verify hooks are in `~/.claude/settings.json`. Run `mypilot init-hooks` to reconfigure. |
-| Wrong IP in QR code | Set `LAN_IP` env var or run `mypilot pair-info` after starting the gateway. For remote access, use `mypilot pair-info <domain>`. |
+| 问题 | 解决方案 |
+|------|----------|
+| 网关无法启动 | 检查是否已在运行：`mypilot status`。必要时终止残留进程。 |
+| 二维码无法扫描 | 确保 iPhone 和电脑在同一 WiFi 网络。尝试 `mypilot pair-info` 获取新的二维码。 |
+| 应用无法连接 | 检查防火墙设置，确保本机 16321 端口开放。 |
+| Hook 未触发 | 检查 `~/.claude/settings.json` 中的配置。运行 `mypilot init-hooks` 重新配置。 |
+| 二维码中 IP 不正确 | 设置 `LAN_IP` 环境变量，或启动网关后运行 `mypilot pair-info`。远程访问请使用 `mypilot pair-info <域名>`。 |
 
-## Data Directory
+## 数据目录
 
 ```
 ~/.mypilot/
-├── key              # AES-256-GCM encryption key
-├── gateway.pid      # PID file for background mode
+├── key              # AES-256-GCM 加密密钥
+├── gateway.pid      # 后台模式的 PID 文件
 └── logs/
-    └── events-YYYY-MM-DD.jsonl   # Daily event logs
+    └── events-YYYY-MM-DD.jsonl   # 按天存储的事件日志
 ```
 
-## License
+## 许可证
 
 MIT
