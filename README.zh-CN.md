@@ -9,6 +9,8 @@
 [English](README.md) | 中文
 </div>
 
+> **内测邀请** — MyPilot 目前正在 TestFlight 内测中。[加入内测](https://testflight.apple.com/join/gU2Tw8Hg)抢先体验。
+
 MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你的 iPhone。在接管模式下，你可以直接在手机上审批权限、回答问题、提交 Prompt。
 
 <p align="center">
@@ -22,7 +24,7 @@ MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你
 ## 环境要求
 
 - **Node.js** >= 20
-- **iPhone** 并安装 [MyPilot](https://apps.apple.com/app/mypilot) 应用
+- **iPhone** 并安装 [MyPilot](https://testflight.apple.com/join/gU2Tw8Hg) 应用（TestFlight 内测）
 - **Claude Code** CLI
 
 ## 快速开始

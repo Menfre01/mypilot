@@ -9,6 +9,8 @@ Gateway server for [MyPilot](https://apps.apple.com/app/mypilot) — the iOS rem
 English | [中文](README.zh-CN.md)
 </div>
 
+> **Beta Testing** — MyPilot is currently in TestFlight beta. [Join the beta](https://testflight.apple.com/join/gU2Tw8Hg) to get early access.
+
 MyPilot receives Claude Code hook events and streams them to your iPhone via WebSocket. In takeover mode, you can approve/deny permissions, answer questions, and submit prompts from your phone.
 
 <p align="center">
@@ -22,7 +24,7 @@ MyPilot receives Claude Code hook events and streams them to your iPhone via Web
 ## Requirements
 
 - **Node.js** >= 20
-- **iPhone** with the MyPilot app installed ([App Store](https://apps.apple.com/app/mypilot))
+- **iPhone** with the MyPilot app installed ([TestFlight Beta](https://testflight.apple.com/join/gU2Tw8Hg))
 - **Claude Code** CLI
 
 ## Quick Start
