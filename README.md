@@ -6,6 +6,20 @@ Gateway server for [MyPilot](https://apps.apple.com/app/mypilot) — the iOS rem
 
 MyPilot receives Claude Code hook events and streams them to your iPhone via WebSocket. In takeover mode, you can approve/deny permissions, answer questions, and submit prompts from your phone.
 
+<p align="center">
+<img src="assets/iphone-sessions.png" width="220" alt="Session list on iPhone" />
+<img src="assets/iphone-events.png" width="220" alt="Live event stream on iPhone" />
+<img src="assets/iphone-interact.png" width="220" alt="Takeover interaction on iPhone" />
+</p>
+
+<p align="center"><strong>iPhone</strong> — session list · live events · takeover mode</p>
+
+<p align="center">
+<img src="assets/ipad-events.png" width="480" alt="Live event stream on iPad" />
+</p>
+
+<p align="center"><strong>iPad</strong> — multi-device support with full event stream</p>
+
 ## Requirements
 
 - **Node.js** >= 20
@@ -21,8 +35,8 @@ npm install -g mypilot
 # 2. Configure Claude Code hooks
 mypilot init-hooks
 
-# 3. Start the gateway
-mypilot gateway
+# 3. Start the gateway (background)
+mypilot start
 ```
 
 Scan the QR code displayed in your terminal with the MyPilot app on your iPhone. The QR code contains the gateway address and encryption key — everything needed for a secure connection.
@@ -30,23 +44,22 @@ Scan the QR code displayed in your terminal with the MyPilot app on your iPhone.
 ## Architecture
 
 ```
-Claude Code ──(command hook / curl)──▶ Gateway (:16321) ──(AES-256-GCM WebSocket)──▶ MyPilot iOS App
-                                        ├── POST /hook         ← hook event endpoint
+Claude Code ──(command hook / curl)──▶ Gateway (:16321) ──(AES-256-GCM WebSocket)──▶ MyPilot App (device A)
+                                        ├── POST /hook         ← hook event endpoint       └──▶ MyPilot App (device B)
                                         ├── GET  /pair         ← key validation
-                                        └── WS   /ws-gateway   ← encrypted WebSocket
+                                        └── WS   /ws-gateway   ← encrypted WebSocket (multi-device)
 ```
 
-All WebSocket communication between the Gateway and the MyPilot app is encrypted with **AES-256-GCM** using a pre-shared key distributed via QR code. The same key is used for both connection authentication and message encryption — no separate token is needed.
+All WebSocket communication between the Gateway and the MyPilot app is end-to-end encrypted with **AES-256-GCM** using a pre-shared key distributed via QR code. The same key is used for both connection authentication and message encryption — no separate token is needed.
 
 ### Security & Reliability
 
-- **AES-256-GCM** encryption with a unique 12-byte IV per message and 16-byte authentication tag
+- **End-to-end encryption** — AES-256-GCM with a unique random 12-byte IV per message and 16-byte authentication tag; the gateway cannot read plaintext without the key, and any tampering is detected via the auth tag
 - **Key-based authentication** — clients authenticate via the pre-shared key in the WebSocket URL
-- **Heartbeat** — 30-second keep-alive pings detect stale connections
+- **Multi-device support** — connect multiple iPhones/iPads simultaneously; each device gets a unique `deviceId`, receives all broadcasts, and can send commands independently; same-device reconnection seamlessly replaces the old connection
+- **Heartbeat** — 30-second keep-alive pings detect stale connections per device
 - **Event persistence** — all events are logged to JSONL files (`~/.mypilot/logs/`)
-- **Reconnection recovery** — clients can resume from the last received sequence number after reconnecting, with an offline message buffer of up to 200 events
-
-> **Note:** Currently only **single-device** connections are supported. Multi-device support is in development.
+- **Reconnection recovery** — clients can resume from the last received sequence number after reconnecting, with a per-device offline message buffer of up to 200 events
 
 ## CLI Commands
 

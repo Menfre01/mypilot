@@ -6,7 +6,7 @@ import { createServer } from './server.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { waitForMessage, waitForClose, collectMessages, encSend, decRaw } from './ws-test-helpers.js';
+import { waitForMessage, waitForClose, collectMessages, encSend, decRaw, wsUrl } from './ws-test-helpers.js';
 
 // ── Helpers ──
 
@@ -129,7 +129,7 @@ describe('createServer', () => {
     server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const res = await httpReq(port, 'GET', `/pair?key=${TEST_KEY_B64}`);
+    const res = await httpReq(port, 'GET', `/pair?key=${encodeURIComponent(TEST_KEY_B64)}`);
     expect(res.status).toBe(200);
     const parsed = JSON.parse(res.body);
     expect(parsed.ok).toBe(true);
@@ -140,7 +140,7 @@ describe('createServer', () => {
     server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const res = await httpReq(port, 'GET', `/pair?key=${TEST_KEY_B64}`);
+    const res = await httpReq(port, 'GET', `/pair?key=${encodeURIComponent(TEST_KEY_B64)}`);
     expect(res.headers['access-control-allow-origin']).toBe('*');
   });
 
@@ -194,7 +194,7 @@ describe('createServer', () => {
     server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     const msg = await waitForMessage(ws, TEST_KEY);
 
     const parsed = JSON.parse(msg);
@@ -222,7 +222,7 @@ describe('createServer', () => {
     server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=wrong`);
+    const ws = new WebSocket(wsUrl(port, 'wrong'));
     await new Promise<void>((resolve) => {
       ws.on('error', () => {});
       ws.on('close', () => resolve());
@@ -234,7 +234,7 @@ describe('createServer', () => {
     server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForMessage(ws, TEST_KEY); // consume initial connected message
 
     // Post an event and concurrently wait for the WS broadcast
@@ -264,7 +264,7 @@ describe('createServer', () => {
     server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForMessage(ws, TEST_KEY); // consume initial connected message
 
     // Send takeover message (encrypted)
@@ -284,7 +284,7 @@ describe('createServer', () => {
     server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForMessage(ws, TEST_KEY); // consume initial connected message
 
     // Switch to takeover mode (encrypted)
@@ -341,7 +341,7 @@ describe('createServer', () => {
     server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws1 = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForMessage(ws1, TEST_KEY); // consume initial connected message
 
     // Switch to takeover (encrypted)
@@ -354,7 +354,7 @@ describe('createServer', () => {
     await waitForClose(ws1);
 
     // New client connects — mode should still be takeover (global, persists across refresh)
-    const ws2 = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64));
     const msg = await waitForMessage(ws2, TEST_KEY);
     const parsed = JSON.parse(msg);
     expect(parsed.mode).toBe('takeover');
@@ -367,7 +367,7 @@ describe('createServer', () => {
     server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForMessage(ws, TEST_KEY); // consume initial connected message
 
     // Register a session by posting a Notification event
@@ -400,7 +400,7 @@ describe('createServer', () => {
     server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForMessage(ws, TEST_KEY); // consume initial connected message
 
     // Switch to takeover (encrypted)
@@ -422,7 +422,7 @@ describe('createServer', () => {
     server = createServer(port, logDir, TEST_KEY);
     await server.start();
 
-    const ws1 = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForMessage(ws1, TEST_KEY); // consume initial connected message
 
     // Switch to takeover mode (encrypted)
@@ -466,7 +466,7 @@ describe('createServer', () => {
     expect(raceResult).toBe('pending');
 
     // Reconnect with a new client
-    const ws2 = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64));
     const connectMsg = await waitForMessage(ws2, TEST_KEY);
     const connectParsed = JSON.parse(connectMsg);
     expect(connectParsed.mode).toBe('takeover');

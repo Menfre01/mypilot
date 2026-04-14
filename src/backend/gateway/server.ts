@@ -82,7 +82,7 @@ export function createServer(port: number, logDir: string, key: Buffer): Gateway
     res.end('Not Found');
   }
 
-  function broadcastSessionState(lastEventSeq?: number): void {
+  function broadcastSessionState(lastEventSeq?: number, targetDeviceId?: string): void {
     // With checkpoint: only events after it (may be empty if up-to-date).
     // Without checkpoint (fresh install): full in-memory history.
     const recentEvents = lastEventSeq != null
@@ -94,10 +94,11 @@ export function createServer(port: number, logDir: string, key: Buffer): Gateway
       hookHandler.getMode(),
       recentEvents,
       hookHandler.getPendingInteractions(),
+      targetDeviceId,
     );
   }
 
-  function handleClientMessage(message: ClientMessage): void {
+  function handleClientMessage(message: ClientMessage, deviceId: string): void {
     switch (message.type) {
       case 'takeover':
         hookHandler.setMode('takeover');
@@ -109,7 +110,7 @@ export function createServer(port: number, logDir: string, key: Buffer): Gateway
         pendingStore.resolve(message.sessionId, message.eventId, message.response);
         break;
       case 'request_sessions':
-        broadcastSessionState(message.lastEventSeq);
+        broadcastSessionState(message.lastEventSeq, deviceId);
         break;
     }
   }
@@ -121,12 +122,13 @@ export function createServer(port: number, logDir: string, key: Buffer): Gateway
 
       wsBus.attach(httpServer);
       wsBus.onMessage(handleClientMessage);
-      wsBus.onConnect((url) => {
+      wsBus.onConnect((url, deviceId) => {
         // Read lastEventSeq from WS URL to send correct events in one shot.
         const seqParam = url.searchParams.get('lastEventSeq');
         const lastEventSeq = seqParam != null ? Number(seqParam) : undefined;
         broadcastSessionState(
           Number.isFinite(lastEventSeq) ? lastEventSeq : undefined,
+          deviceId,
         );
       });
 

@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { WsBus } from './ws-bus.js';
 import type { SessionInfo, GatewayMessage, ClientMessage } from '../../shared/protocol.js';
-import { waitForOpen, waitForMessage, waitForClose, collectMessages, encSend } from './ws-test-helpers.js';
+import { waitForOpen, waitForMessage, waitForClose, collectMessages, encSend, wsUrl } from './ws-test-helpers.js';
 
 const TEST_KEY = randomBytes(32);
 const TEST_KEY_B64 = TEST_KEY.toString('base64');
@@ -23,7 +23,15 @@ describe('WsBus', () => {
 
   afterEach(async () => {
     bus.close();
-    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      httpServer.close(() => finish());
+      setTimeout(() => {
+        httpServer.closeAllConnections?.();
+        finish();
+      }, 200);
+    });
   });
 
   it('client connects and receives session list via onConnect handler', async () => {
@@ -36,7 +44,7 @@ describe('WsBus', () => {
     });
     bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     const msg = await waitForMessage(ws, TEST_KEY);
     const parsed = JSON.parse(msg);
     expect(parsed).toEqual({
@@ -66,7 +74,7 @@ describe('WsBus', () => {
     bus.attach(httpServer);
 
     const wrongKey = randomBytes(32).toString('base64');
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${wrongKey}`);
+    const ws = new WebSocket(wsUrl(port, wrongKey));
     await new Promise<void>((resolve) => {
       ws.on('error', () => {});
       ws.on('close', () => resolve());
@@ -82,7 +90,7 @@ describe('WsBus', () => {
 
     bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForOpen(ws);
 
     bus.sendSessionList(sessions, 'takeover');
@@ -110,7 +118,7 @@ describe('WsBus', () => {
 
     bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForOpen(ws);
 
     bus.broadcast(message);
@@ -134,7 +142,7 @@ describe('WsBus', () => {
 
     bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForOpen(ws);
 
     const clientMsg: ClientMessage = { type: 'takeover' };
@@ -155,7 +163,7 @@ describe('WsBus', () => {
 
     bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForOpen(ws);
 
     ws.close();
@@ -168,7 +176,7 @@ describe('WsBus', () => {
   it('disconnect() closes client connection', async () => {
     bus.attach(httpServer);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForOpen(ws);
 
     expect(bus.hasClient()).toBe(true);
@@ -185,7 +193,7 @@ describe('WsBus', () => {
     bus.attach(httpServer);
     expect(bus.hasClient()).toBe(false);
 
-    const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForOpen(ws);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -212,7 +220,7 @@ describe('WsBus', () => {
         bus.sendSessionList([], 'bystander', []);
       });
 
-      const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+      const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
       const messagesPromise = collectMessages(ws, 1, 3000, TEST_KEY);
 
       await waitForOpen(ws);
@@ -233,7 +241,7 @@ describe('WsBus', () => {
       bus.onConnect(() => bus.broadcast(connectMsg));
 
       // Connect and disconnect
-      const ws1 = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+      const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64));
       await waitForOpen(ws1);
       ws1.close();
       await waitForClose(ws1);
@@ -245,7 +253,7 @@ describe('WsBus', () => {
 
       // Reconnect — onConnect fires, its message is delivered;
       // queued message was superseded by the connect handler.
-      const ws2 = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+      const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64));
       const messagesPromise = collectMessages(ws2, 1, 3000, TEST_KEY);
 
       await waitForOpen(ws2);
@@ -268,11 +276,258 @@ describe('WsBus', () => {
     });
   });
 
+  describe('multi-device support', () => {
+    it('allows two devices with different deviceId to connect simultaneously', async () => {
+      bus.attach(httpServer);
+
+      const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
+      const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-B' }));
+      await Promise.all([waitForOpen(ws1), waitForOpen(ws2)]);
+      // Give server time to register clients
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Both should be tracked
+      expect(bus.hasClient()).toBe(true);
+      expect(bus.hasClient('device-A')).toBe(true);
+      expect(bus.hasClient('device-B')).toBe(true);
+
+      ws1.close();
+      ws2.close();
+      await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
+    });
+
+    it('same deviceId reconnect replaces old connection', async () => {
+      bus.attach(httpServer);
+
+      const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
+      await waitForOpen(ws1);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(bus.hasClient('device-A')).toBe(true);
+
+      // Connect with same deviceId — should replace
+      const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
+      await waitForOpen(ws2);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Old connection should be closed
+      await waitForClose(ws1);
+
+      // New connection should be active
+      expect(bus.hasClient('device-A')).toBe(true);
+      expect(bus.hasClient()).toBe(true);
+
+      ws2.close();
+      await waitForClose(ws2);
+    });
+
+    it('broadcast sends to all connected devices', async () => {
+      bus.attach(httpServer);
+
+      const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
+      const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-B' }));
+      await Promise.all([waitForOpen(ws1), waitForOpen(ws2)]);
+
+      const message: GatewayMessage = { type: 'mode_changed', mode: 'takeover' };
+      bus.broadcast(message);
+
+      const [msg1, msg2] = await Promise.all([
+        waitForMessage(ws1, TEST_KEY),
+        waitForMessage(ws2, TEST_KEY),
+      ]);
+
+      expect(JSON.parse(msg1)).toEqual(message);
+      expect(JSON.parse(msg2)).toEqual(message);
+
+      ws1.close();
+      ws2.close();
+      await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
+    });
+
+    it('broadcast with targetDeviceId sends only to that device', async () => {
+      bus.attach(httpServer);
+
+      const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
+      const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-B' }));
+      await Promise.all([waitForOpen(ws1), waitForOpen(ws2)]);
+
+      const message: GatewayMessage = { type: 'mode_changed', mode: 'takeover' };
+      bus.broadcast(message, 'device-A');
+
+      // device-A should receive the message
+      const msg1 = await waitForMessage(ws1, TEST_KEY);
+      expect(JSON.parse(msg1)).toEqual(message);
+
+      // device-B should NOT receive any message (timeout with empty result)
+      const msgs2 = await collectMessages(ws2, 1, 200, TEST_KEY);
+      expect(msgs2).toHaveLength(0);
+
+      ws1.close();
+      ws2.close();
+      await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
+    });
+
+    it('onMessage receives deviceId of sending device', async () => {
+      const received: Array<{ msg: ClientMessage; deviceId: string }> = [];
+      bus.onMessage((msg, deviceId) => received.push({ msg, deviceId }));
+
+      bus.attach(httpServer);
+
+      const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
+      const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-B' }));
+      await waitForOpen(ws1);
+      await waitForOpen(ws2);
+
+      encSend(ws1, TEST_KEY, { type: 'takeover' });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      encSend(ws2, TEST_KEY, { type: 'release' });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(received).toHaveLength(2);
+      expect(received[0].msg).toEqual({ type: 'takeover' });
+      expect(received[0].deviceId).toBe('device-A');
+      expect(received[1].msg).toEqual({ type: 'release' });
+      expect(received[1].deviceId).toBe('device-B');
+
+      ws1.close();
+      ws2.close();
+      await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
+    });
+
+    it('onDisconnect fires with correct deviceId', async () => {
+      const disconnectedDevices: string[] = [];
+      bus.onDisconnect((deviceId) => disconnectedDevices.push(deviceId));
+
+      bus.attach(httpServer);
+
+      const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
+      const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-B' }));
+      await waitForOpen(ws1);
+      await waitForOpen(ws2);
+
+      ws1.close();
+      await waitForClose(ws1);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(disconnectedDevices).toEqual(['device-A']);
+      expect(bus.hasClient('device-A')).toBe(false);
+      expect(bus.hasClient('device-B')).toBe(true);
+
+      ws2.close();
+      await waitForClose(ws2);
+    });
+
+    it('sendSessionList targets specific device when targetDeviceId is given', async () => {
+      bus.attach(httpServer);
+
+      const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
+      const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-B' }));
+      await Promise.all([waitForOpen(ws1), waitForOpen(ws2)]);
+
+      const sessions: SessionInfo[] = [
+        { id: 's1', color: '#89b4fa', colorIndex: 0, startedAt: 1000 },
+      ];
+
+      // Send session list only to device-B
+      bus.sendSessionList(sessions, 'takeover', [], [], 'device-B');
+
+      // device-B should receive
+      const msg2 = await waitForMessage(ws2, TEST_KEY);
+      expect(JSON.parse(msg2)).toEqual({
+        type: 'connected',
+        sessions,
+        mode: 'takeover',
+        recentEvents: [],
+        pendingInteractions: [],
+      });
+
+      // device-A should NOT receive
+      const msgs1 = await collectMessages(ws1, 1, 200, TEST_KEY);
+      expect(msgs1).toHaveLength(0);
+
+      ws1.close();
+      ws2.close();
+      await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
+    });
+
+    it('disconnect(deviceId) closes specific device only', async () => {
+      bus.attach(httpServer);
+
+      const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
+      const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-B' }));
+      await waitForOpen(ws1);
+      await waitForOpen(ws2);
+
+      bus.disconnect('device-A');
+      await waitForClose(ws1);
+
+      expect(bus.hasClient('device-A')).toBe(false);
+      expect(bus.hasClient('device-B')).toBe(true);
+
+      // device-B should still receive messages
+      const message: GatewayMessage = { type: 'mode_changed', mode: 'takeover' };
+      bus.broadcast(message);
+      const msg = await waitForMessage(ws2, TEST_KEY);
+      expect(JSON.parse(msg)).toEqual(message);
+
+      ws2.close();
+      await waitForClose(ws2);
+    });
+
+    it('disconnect() without args closes all devices', async () => {
+      bus.attach(httpServer);
+
+      const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
+      const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-B' }));
+      await waitForOpen(ws1);
+      await waitForOpen(ws2);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      bus.disconnect();
+      await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
+
+      expect(bus.hasClient()).toBe(false);
+    });
+
+    it('auto-generates deviceId when not provided (backward compat)', async () => {
+      bus.attach(httpServer);
+
+      // Connect without deviceId — should still work
+      const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
+      await waitForOpen(ws);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Should be tracked
+      expect(bus.hasClient()).toBe(true);
+
+      ws.close();
+      await waitForClose(ws);
+    });
+
+    it('two connections without deviceId get separate auto-generated IDs', async () => {
+      bus.attach(httpServer);
+
+      const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64));
+      const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64));
+
+      // Both should connect successfully (auto-generated IDs)
+      await Promise.all([waitForOpen(ws1), waitForOpen(ws2)]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Both should be tracked (separate auto-generated IDs)
+      expect(bus.hasClient()).toBe(true);
+
+      ws1.close();
+      ws2.close();
+      await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
+    });
+  });
+
   describe('heartbeat', () => {
     it('connection stays alive — heartbeat pongs keep socket open', async () => {
       bus.attach(httpServer);
 
-      const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+      const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
       await waitForOpen(ws);
 
       expect(bus.hasClient()).toBe(true);
@@ -293,7 +548,7 @@ describe('WsBus', () => {
     it('terminates connection that fails pong response', async () => {
       bus.attach(httpServer);
 
-      const ws = new WebSocket(`ws://localhost:${port}/ws-gateway?key=${TEST_KEY_B64}`);
+      const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
       await waitForOpen(ws);
       expect(bus.hasClient()).toBe(true);
 

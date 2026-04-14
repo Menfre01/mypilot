@@ -3,23 +3,24 @@ import type { Server, IncomingMessage } from 'node:http';
 import type { GatewayMessage, ClientMessage, SessionInfo, GatewayMode, PendingInteraction, EncryptedEnvelope } from '../../shared/protocol.js';
 import { encrypt, decrypt } from './crypto.js';
 
-export type MessageHandler = (message: ClientMessage) => void;
-export type DisconnectHandler = () => void;
-export type ConnectHandler = (url: URL) => void;
+export type MessageHandler = (message: ClientMessage, deviceId: string) => void;
+export type DisconnectHandler = (deviceId: string) => void;
+export type ConnectHandler = (url: URL, deviceId: string) => void;
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const MAX_OFFLINE_QUEUE = 200;
 
 export class WsBus {
   private wss: WebSocketServer | null = null;
-  private client: WebSocket | null = null;
+  private clients = new Map<string, WebSocket>();
   private key: Buffer;
   private messageHandlers: MessageHandler[] = [];
   private disconnectHandlers: DisconnectHandler[] = [];
   private connectHandlers: ConnectHandler[] = [];
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private offlineQueue: string[] = [];
-  private aliveSockets = new WeakSet<WebSocket>();
+  private heartbeatTimers = new Map<string, ReturnType<typeof setInterval>>();
+  private perClientOfflineQueue = new Map<string, string[]>();
+  private aliveSockets = new Map<WebSocket, boolean>();
+  private autoIdCounter = 0;
 
   constructor(key: Buffer) {
     this.key = key;
@@ -38,21 +39,27 @@ export class WsBus {
     });
 
     this.wss.on('connection', (ws, req) => {
-      // Single client model: replace existing client
-      if (this.client) {
-        this.client.close();
-      }
-      this.client = ws;
-
-      this._startHeartbeat(ws);
-
       const connUrl = new URL(req.url ?? '/', `http://localhost`);
 
-      // Don't flush offline queue here — sendSessionList (called by connect
-      // handlers) delivers recentEvents which is a superset, and clears the
-      // queue itself. Flushing first would cause duplicates.
+      // Resolve deviceId — auto-generate if not provided (backward compat)
+      let deviceId = connUrl.searchParams.get('deviceId') ?? '';
+      if (!deviceId) {
+        deviceId = `_auto_${++this.autoIdCounter}_${Date.now().toString(36)}`;
+      }
+
+      // Same deviceId reconnect: replace old connection
+      const existing = this.clients.get(deviceId);
+      if (existing && existing !== ws) {
+        existing.close();
+        this.aliveSockets.delete(existing);
+      }
+
+      this.clients.set(deviceId, ws);
+      this._startHeartbeat(deviceId, ws);
+      this.perClientOfflineQueue.set(deviceId, []);
+
       for (const handler of this.connectHandlers) {
-        handler(connUrl);
+        handler(connUrl, deviceId);
       }
 
       ws.on('message', (data) => {
@@ -60,37 +67,46 @@ export class WsBus {
           const raw = data.toString();
           const message: ClientMessage = JSON.parse(decrypt(this.key, JSON.parse(raw) as EncryptedEnvelope));
           for (const handler of this.messageHandlers) {
-            handler(message);
+            handler(message, deviceId);
           }
         } catch {
-          // Ignore malformed or unauthenticated messages
+          // malformed or unauthenticated — ignore
         }
       });
 
       ws.on('close', () => {
-        if (this.client === ws) {
-          this.client = null;
-          this._stopHeartbeat();
+        if (this.clients.get(deviceId) === ws) {
+          this._cleanupDevice(deviceId, ws);
           for (const handler of this.disconnectHandlers) {
-            handler();
+            handler(deviceId);
           }
         }
       });
 
       ws.on('pong', () => {
-        this.aliveSockets.add(ws);
+        this.aliveSockets.set(ws, true);
       });
     });
   }
 
-  broadcast(message: GatewayMessage): void {
+  broadcast(message: GatewayMessage, targetDeviceId?: string): void {
     const raw = encrypt(this.key, JSON.stringify(message));
-    if (this.client && this.client.readyState === WebSocket.OPEN) {
-      this._send(this.client, raw);
-    } else {
-      // Queue for offline delivery
-      if (this.offlineQueue.length < MAX_OFFLINE_QUEUE) {
-        this.offlineQueue.push(raw);
+
+    if (targetDeviceId) {
+      const ws = this.clients.get(targetDeviceId);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        this._send(ws, raw);
+      } else {
+        this._enqueueOffline(targetDeviceId, raw);
+      }
+      return;
+    }
+
+    for (const [deviceId, ws] of this.clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        this._send(ws, raw);
+      } else {
+        this._enqueueOffline(deviceId, raw);
       }
     }
   }
@@ -100,17 +116,20 @@ export class WsBus {
     mode: GatewayMode,
     recentEvents: { sessionId: string; event: import('../../shared/protocol.js').SSEHookEvent }[] = [],
     pendingInteractions: PendingInteraction[] = [],
+    targetDeviceId?: string,
   ): void {
-    // Clear offline queue — recentEvents is a superset and will be delivered
-    // in the same 'connected' message, so flushing would cause duplicates.
-    this.offlineQueue = [];
+    if (targetDeviceId) {
+      this.perClientOfflineQueue.set(targetDeviceId, []);
+    } else {
+      this.perClientOfflineQueue.clear();
+    }
     this.broadcast({
       type: 'connected',
       sessions,
       mode,
       recentEvents,
       pendingInteractions,
-    });
+    }, targetDeviceId);
   }
 
   onMessage(handler: MessageHandler): void {
@@ -125,56 +144,94 @@ export class WsBus {
     this.connectHandlers.push(handler);
   }
 
-  disconnect(): void {
-    if (this.client) {
-      this.client.close();
-      this.client = null;
+  disconnect(deviceId?: string): void {
+    if (deviceId) {
+      const ws = this.clients.get(deviceId);
+      if (ws) this._closeAndNotify(deviceId, ws);
+    } else {
+      const entries = Array.from(this.clients.entries());
+      this.clients.clear();
+      for (const [id, ws] of entries) this._closeAndNotify(id, ws);
     }
-    this._stopHeartbeat();
   }
 
   close(): void {
-    if (this.client) {
-      this.client.close();
-      this.client = null;
-    }
-    this._stopHeartbeat();
+    this.disconnect();
     if (this.wss) {
       this.wss.close();
       this.wss = null;
     }
   }
 
-  hasClient(): boolean {
-    return this.client !== null && this.client.readyState === WebSocket.OPEN;
+  hasClient(deviceId?: string): boolean {
+    if (deviceId) {
+      const ws = this.clients.get(deviceId);
+      return ws !== undefined && ws.readyState === WebSocket.OPEN;
+    }
+    for (const ws of this.clients.values()) {
+      if (ws.readyState === WebSocket.OPEN) return true;
+    }
+    return false;
+  }
+
+  // ── Internal ──
+
+  private _cleanupDevice(deviceId: string, ws: WebSocket): void {
+    this.clients.delete(deviceId);
+    this._stopHeartbeat(deviceId);
+    this.aliveSockets.delete(ws);
+    this.perClientOfflineQueue.delete(deviceId);
+  }
+
+  private _closeAndNotify(deviceId: string, ws: WebSocket): void {
+    this._cleanupDevice(deviceId, ws);
+    ws.close();
+    for (const handler of this.disconnectHandlers) {
+      handler(deviceId);
+    }
   }
 
   // ── Heartbeat ──
 
-  private _startHeartbeat(ws: WebSocket): void {
-    this._stopHeartbeat();
-    this.aliveSockets.add(ws);
-    this.heartbeatTimer = setInterval(() => {
-      if (this.client !== ws) {
-        this._stopHeartbeat();
+  private _startHeartbeat(deviceId: string, ws: WebSocket): void {
+    this._stopHeartbeat(deviceId);
+    this.aliveSockets.set(ws, true);
+
+    const timer = setInterval(() => {
+      const currentWs = this.clients.get(deviceId);
+      if (currentWs !== ws) {
+        this._stopHeartbeat(deviceId);
         return;
       }
-      if (!this.aliveSockets.has(ws)) {
+      if (!this.aliveSockets.get(ws)) {
         // No pong received — terminate dead connection
         ws.terminate();
         return;
       }
-      this.aliveSockets.delete(ws);
+      this.aliveSockets.set(ws, false);
       if (ws.readyState === WebSocket.OPEN) {
         ws.ping();
       }
     }, HEARTBEAT_INTERVAL_MS);
+
+    this.heartbeatTimers.set(deviceId, timer);
   }
 
-  private _stopHeartbeat(): void {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
+  private _stopHeartbeat(deviceId: string): void {
+    const timer = this.heartbeatTimers.get(deviceId);
+    if (timer) {
+      clearInterval(timer);
+      this.heartbeatTimers.delete(deviceId);
+    }
+  }
+
+  // ── Offline queue ──
+
+  private _enqueueOffline(deviceId: string, raw: string): void {
+    const queue = this.perClientOfflineQueue.get(deviceId);
+    if (!queue) return;
+    if (queue.length < MAX_OFFLINE_QUEUE) {
+      queue.push(raw);
     }
   }
 

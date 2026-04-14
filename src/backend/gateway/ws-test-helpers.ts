@@ -54,3 +54,9 @@ export function encSend(ws: WebSocket, key: Buffer, obj: unknown): void {
 export function decRaw(key: Buffer, raw: string): string {
   return decrypt(key, JSON.parse(raw));
 }
+
+/** Build WebSocket URL with properly URL-encoded key. */
+export function wsUrl(port: number, key: string, extra?: Record<string, string>): string {
+  const params = new URLSearchParams({ key, ...extra });
+  return `ws://localhost:${port}/ws-gateway?${params.toString()}`;
+}
