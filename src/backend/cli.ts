@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
@@ -208,12 +208,16 @@ export async function runCli(
 }
 
 // Entry point when run as a script (not during test import)
-// Check if this module is the main entry point
-const isMainModule =
-  process.argv[1] &&
-  (process.argv[1].endsWith("cli.ts") ||
-    process.argv[1].endsWith("cli.js") ||
-    process.argv[1].endsWith("dist/backend/cli.js"));
+// Resolve symlinks so npm-linked binaries are detected correctly
+const isMainModule = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    const resolved = realpathSync(process.argv[1]);
+    return resolved.endsWith("cli.ts") || resolved.endsWith("cli.js");
+  } catch {
+    return false;
+  }
+})();
 
 if (isMainModule && process.env.VITEST === undefined) {
   runCli(process.argv);
