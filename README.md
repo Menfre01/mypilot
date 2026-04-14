@@ -40,7 +40,9 @@ Claude Code ──(command hook / curl)──▶ Gateway (:16321)
 mypilot gateway     # Start the Gateway server (foreground)
 mypilot status      # Check Gateway status (PID, port)
 mypilot init-hooks  # Configure Claude Code hooks (auto-merge into ~/.claude/settings.json)
-mypilot pair-info   # Show pairing info (IP + QR code) for reconnecting
+mypilot pair-info              # Show pairing info (IP + QR code) for reconnecting
+mypilot pair-info my.domain.com     # Use custom domain (NAT traversal), port defaults to 443
+mypilot pair-info my.domain.com:8080    # Custom domain with port
 ```
 
 ## Hook Configuration
@@ -100,6 +102,17 @@ mypilot pair-info
 
 This displays the pairing QR code and connection details (IP, port, token) without restarting the gateway.
 
+### NAT Traversal
+
+If your iPhone is not on the same LAN (e.g., using a tunnel service like frp, ngrok, Cloudflare Tunnel), provide your domain:
+
+```bash
+mypilot pair-info tunnel.example.com        # defaults to port 443
+mypilot pair-info tunnel.example.com:8080   # custom port
+```
+
+The QR code will use the domain as the host, allowing the iOS app to connect through the tunnel.
+
 ## Docker
 
 ```bash
@@ -128,7 +141,7 @@ npm run typecheck    # type check only
 | QR code won't scan | Ensure iPhone and computer are on the same WiFi network. Try `mypilot pair-info` for a fresh QR code. |
 | App can't connect | Check firewall settings. Port 16321 must be open on your machine. |
 | Hooks not firing | Verify hooks are in `~/.claude/settings.json`. Run `mypilot init-hooks` to reconfigure. |
-| Wrong IP in QR code | Set `LAN_IP` env var or run `mypilot pair-info` after starting the gateway. |
+| Wrong IP in QR code | Set `LAN_IP` env var or run `mypilot pair-info` after starting the gateway. For remote access, use `mypilot pair-info <domain>`. |
 
 ## Data Directory
 

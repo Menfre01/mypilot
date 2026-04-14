@@ -2,7 +2,7 @@
 
 /** QR code payload: gateway connection info. */
 export interface PairingInfo {
-  h: string; // host IP
+  h: string; // host (LAN IP or domain for NAT traversal)
   p: number; // port
   t: string; // token
 }

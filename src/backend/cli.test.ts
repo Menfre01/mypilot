@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
+import { ChildProcess } from "node:child_process";
 import { runCli, PID_DIR, PID_PATH, DEFAULT_PORT, SETTINGS_PATH } from "./cli.js";
 
 // ── Mocks ──
@@ -64,6 +65,19 @@ class ExitError extends Error {
 
 const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+// Mock child_process.spawn for start command
+let mockSpawnChild: Partial<ChildProcess>;
+
+vi.mock("node:child_process", () => ({
+  spawn: vi.fn(() => {
+    mockSpawnChild = {
+      pid: 12345,
+      unref: vi.fn(),
+    };
+    return mockSpawnChild as ChildProcess;
+  }),
+}));
 
 // ── Helpers ──
 
@@ -312,6 +326,36 @@ describe("runCli", () => {
       const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
       expect(output).toMatch(/pairing info/i);
     });
+
+    it("uses domain with port 443 when domain provided without port", async () => {
+      mkdirSync(testPidDir, { recursive: true });
+      writeFileSync(join(testPidDir, "token"), "test-token-abc", "utf-8");
+
+      await runCli(makeArgv("pair-info", "tunnel.example.com"), testPidDir, testPidPath);
+
+      const { displayConnectionInfo } = await import("./gateway/qr-display.js");
+      expect(displayConnectionInfo).toHaveBeenCalledWith("tunnel.example.com", 443, "test-token-abc");
+    });
+
+    it("parses host:port when domain includes port", async () => {
+      mkdirSync(testPidDir, { recursive: true });
+      writeFileSync(join(testPidDir, "token"), "test-token-abc", "utf-8");
+
+      await runCli(makeArgv("pair-info", "tunnel.example.com:8080"), testPidDir, testPidPath);
+
+      const { displayConnectionInfo } = await import("./gateway/qr-display.js");
+      expect(displayConnectionInfo).toHaveBeenCalledWith("tunnel.example.com", 8080, "test-token-abc");
+    });
+
+    it("uses LAN IP when domain is not provided", async () => {
+      mkdirSync(testPidDir, { recursive: true });
+      writeFileSync(join(testPidDir, "token"), "test-token-abc", "utf-8");
+
+      await runCli(makeArgv("pair-info"), testPidDir, testPidPath);
+
+      const { displayConnectionInfo } = await import("./gateway/qr-display.js");
+      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, "test-token-abc");
+    });
   });
 
   // ── init-hooks command ──
@@ -346,6 +390,158 @@ describe("runCli", () => {
 
       const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
       expect(output).toContain(testSettingsPath);
+    });
+  });
+
+  // ── start command ──
+
+  describe("start", () => {
+    let killSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      // Mock process.kill so fake PID 12345 appears alive
+      const origKill = process.kill.bind(process);
+      killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number, signal?: string | number) => {
+        if (pid === 12345 && signal === 0) return true; // fake child is alive
+        if (pid === 12345 && typeof signal === "string") return true;
+        return origKill(pid, signal as any);
+      });
+    });
+
+    afterEach(() => {
+      killSpy.mockRestore();
+    });
+
+    it("spawns a detached child process", async () => {
+      const { spawn } = await import("node:child_process");
+
+      setTimeout(() => {
+        mkdirSync(testPidDir, { recursive: true });
+        writeFileSync(testPidPath, "12345", "utf-8");
+      }, 50);
+
+      await runCli(makeArgv("start"), testPidDir, testPidPath);
+
+      expect(spawn).toHaveBeenCalled();
+      const args = (spawn as any).mock.calls[0];
+      expect(args[1]).toContain("gateway");
+      expect(mockSpawnChild.unref).toHaveBeenCalled();
+    });
+
+    it("refuses to start if already running", async () => {
+      mkdirSync(testPidDir, { recursive: true });
+      writeFileSync(testPidPath, String(process.pid), "utf-8");
+
+      try {
+        await runCli(makeArgv("start"), testPidDir, testPidPath);
+        expect.fail("should have thrown");
+      } catch (e) {
+        expect(e).toBeInstanceOf(ExitError);
+        expect((e as ExitError).code).toBe(1);
+      }
+
+      const output = consoleErrorSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(output).toMatch(/already running/i);
+    });
+
+    it("creates log directory", async () => {
+      setTimeout(() => {
+        mkdirSync(testPidDir, { recursive: true });
+        writeFileSync(testPidPath, "12345", "utf-8");
+      }, 50);
+
+      await runCli(makeArgv("start"), testPidDir, testPidPath);
+
+      expect(existsSync(join(testPidDir, "logs"))).toBe(true);
+    });
+
+    it("prints started message with PID", async () => {
+      setTimeout(() => {
+        mkdirSync(testPidDir, { recursive: true });
+        writeFileSync(testPidPath, "12345", "utf-8");
+      }, 50);
+
+      await runCli(makeArgv("start"), testPidDir, testPidPath);
+
+      const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(output).toMatch(/started/i);
+      expect(output).toContain("12345");
+    });
+  });
+
+  // ── stop command ──
+
+  describe("stop", () => {
+    it("reports not running when no PID file", async () => {
+      await runCli(makeArgv("stop"), testPidDir, testPidPath);
+
+      const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(output).toMatch(/not running/i);
+    });
+
+    it("cleans up stale PID file when process is dead", async () => {
+      mkdirSync(testPidDir, { recursive: true });
+      writeFileSync(testPidPath, "999999999", "utf-8");
+
+      await runCli(makeArgv("stop"), testPidDir, testPidPath);
+
+      const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(output).toMatch(/not running/i);
+      expect(existsSync(testPidPath)).toBe(false);
+    });
+
+    it("sends SIGTERM to running process", async () => {
+      mkdirSync(testPidDir, { recursive: true });
+      writeFileSync(testPidPath, String(process.pid), "utf-8");
+
+      let sigtermSent = false;
+      const origKill = process.kill.bind(process);
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number, signal?: string | number) => {
+        if (pid === process.pid && signal === "SIGTERM") {
+          sigtermSent = true;
+          return true;
+        }
+        // After SIGTERM, pretend process died (signal 0 check returns false)
+        if (pid === process.pid && signal === 0 && sigtermSent) {
+          const err = new Error("ESRCH") as any;
+          err.code = "ESRCH";
+          throw err;
+        }
+        return origKill(pid, signal as any);
+      });
+
+      await runCli(makeArgv("stop"), testPidDir, testPidPath);
+
+      expect(sigtermSent).toBe(true);
+      const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(output).toMatch(/stopped/i);
+
+      killSpy.mockRestore();
+    });
+
+    it("removes PID file after stopping", async () => {
+      mkdirSync(testPidDir, { recursive: true });
+      writeFileSync(testPidPath, String(process.pid), "utf-8");
+
+      let sigtermSent = false;
+      const origKill = process.kill.bind(process);
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number, signal?: string | number) => {
+        if (signal === "SIGTERM") {
+          sigtermSent = true;
+          return true;
+        }
+        if (signal === 0 && sigtermSent) {
+          const err = new Error("ESRCH") as any;
+          err.code = "ESRCH";
+          throw err;
+        }
+        return origKill(pid, signal as any);
+      });
+
+      await runCli(makeArgv("stop"), testPidDir, testPidPath);
+      expect(existsSync(testPidPath)).toBe(false);
+
+      killSpy.mockRestore();
     });
   });
 });
