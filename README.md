@@ -247,6 +247,7 @@ npm run docker:restart   # Rebuild & restart
 | App can't connect | Check firewall settings. Port 16321 must be open on your machine. |
 | Hooks not firing | Verify hooks are in `~/.claude/settings.json`. Run `mypilot init-hooks` to reconfigure. |
 | Wrong IP in QR code | Set `LAN_IP` env var or run `mypilot pair-info` after starting the gateway. For remote access, use `mypilot pair-info <domain>`. |
+| App issues or suggestions | [Open an issue](../../issues/new/choose) — bugs and feature requests for both the gateway and iOS app are welcome here. |
 
 ## Data Directory
 

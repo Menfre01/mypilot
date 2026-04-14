@@ -247,6 +247,7 @@ npm run docker:restart   # 重新构建并重启
 | 应用无法连接 | 检查防火墙设置，确保本机 16321 端口开放。 |
 | Hook 未触发 | 检查 `~/.claude/settings.json` 中的配置。运行 `mypilot init-hooks` 重新配置。 |
 | 二维码中 IP 不正确 | 设置 `LAN_IP` 环境变量，或启动网关后运行 `mypilot pair-info`。远程访问请使用 `mypilot pair-info <域名>`。 |
+| App 问题或建议 | [提交 Issue](../../issues/new/choose) — 网关和 iOS App 的问题与建议均欢迎在此反馈。 |
 
 ## 数据目录
 
