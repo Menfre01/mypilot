@@ -1,8 +1,13 @@
-# MyPilot
+<div align="center">
+  <img src="assets/logo.svg" width="128" height="128" alt="MyPilot Logo" />
+  <h1>MyPilot</h1>
 
-English | [中文](README.zh-CN.md)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 Gateway server for [MyPilot](https://apps.apple.com/app/mypilot) — the iOS remote interaction console for Claude Code.
+
+English | [中文](README.zh-CN.md)
+</div>
 
 MyPilot receives Claude Code hook events and streams them to your iPhone via WebSocket. In takeover mode, you can approve/deny permissions, answer questions, and submit prompts from your phone.
 
@@ -13,12 +18,6 @@ MyPilot receives Claude Code hook events and streams them to your iPhone via Web
 </p>
 
 <p align="center"><strong>iPhone</strong> — session list · live events · takeover mode</p>
-
-<p align="center">
-<img src="assets/ipad-events.png" width="480" alt="Live event stream on iPad" />
-</p>
-
-<p align="center"><strong>iPad</strong> — multi-device support with full event stream</p>
 
 ## Requirements
 
@@ -259,4 +258,4 @@ npm run docker:restart   # Rebuild & restart
 
 ## License
 
-MIT
+[Apache License 2.0](LICENSE)

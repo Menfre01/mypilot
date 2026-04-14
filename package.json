@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Gateway server for MyPilot - remote interaction console for Claude Code",
+  "license": "Apache-2.0",
   "bin": {
     "mypilot": "./dist/backend/cli.js"
   },
