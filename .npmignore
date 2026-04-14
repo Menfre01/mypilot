@@ -1,0 +1,28 @@
+# Source and tests
+src/
+*.test.ts
+*.test.js
+vitest.config.*
+
+# Development
+CLAUDE.md
+.claude/
+docker-compose.yml
+Dockerfile
+.dockerignore
+docs/
+
+# Assets (large screenshots, not needed in npm package)
+assets/ipad-*.png
+assets/iphone-*.png
+
+# Build artifacts
+*.tsbuildinfo
+tsconfig.json
+tsconfig.build.json
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
