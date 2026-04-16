@@ -120,7 +120,7 @@ describe('createServer', () => {
     const event = JSON.stringify({ event_name: 'Notification' });
     const res = await httpReq(port, 'POST', '/hook', event);
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
   });
 
   // ── GET /pair ──

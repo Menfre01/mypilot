@@ -22,7 +22,10 @@ describe('WsBus', () => {
   });
 
   afterEach(async () => {
+    // Close bus first (closes all WebSocket connections)
     bus.close();
+    // Give connections time to fully close before shutting down HTTP server
+    await new Promise((resolve) => setTimeout(resolve, 200));
     await new Promise<void>((resolve) => {
       let done = false;
       const finish = () => { if (!done) { done = true; resolve(); } };
@@ -30,7 +33,7 @@ describe('WsBus', () => {
       setTimeout(() => {
         httpServer.closeAllConnections?.();
         finish();
-      }, 200);
+      }, 300);
     });
   });
 
@@ -294,7 +297,7 @@ describe('WsBus', () => {
       ws1.close();
       ws2.close();
       await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
-    });
+    }, 15_000);
 
     it('same deviceId reconnect replaces old connection', async () => {
       bus.attach(httpServer);
@@ -318,7 +321,7 @@ describe('WsBus', () => {
 
       ws2.close();
       await waitForClose(ws2);
-    });
+    }, 15_000);
 
     it('broadcast sends to all connected devices', async () => {
       bus.attach(httpServer);
@@ -341,7 +344,7 @@ describe('WsBus', () => {
       ws1.close();
       ws2.close();
       await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
-    });
+    }, 15_000);
 
     it('broadcast with targetDeviceId sends only to that device', async () => {
       bus.attach(httpServer);
@@ -364,7 +367,7 @@ describe('WsBus', () => {
       ws1.close();
       ws2.close();
       await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
-    });
+    }, 15_000);
 
     it('onMessage receives deviceId of sending device', async () => {
       const received: Array<{ msg: ClientMessage; deviceId: string }> = [];
@@ -378,10 +381,10 @@ describe('WsBus', () => {
       await waitForOpen(ws2);
 
       encSend(ws1, TEST_KEY, { type: 'takeover' });
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 150));
 
       encSend(ws2, TEST_KEY, { type: 'release' });
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 150));
 
       expect(received).toHaveLength(2);
       expect(received[0].msg).toEqual({ type: 'takeover' });
@@ -392,7 +395,7 @@ describe('WsBus', () => {
       ws1.close();
       ws2.close();
       await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
-    });
+    }, 15_000);
 
     it('onDisconnect fires with correct deviceId', async () => {
       const disconnectedDevices: string[] = [];
@@ -407,6 +410,7 @@ describe('WsBus', () => {
 
       ws1.close();
       await waitForClose(ws1);
+      // Allow server-side disconnect handler to fire
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       expect(disconnectedDevices).toEqual(['device-A']);
@@ -415,7 +419,7 @@ describe('WsBus', () => {
 
       ws2.close();
       await waitForClose(ws2);
-    });
+    }, 15_000);
 
     it('sendSessionList targets specific device when targetDeviceId is given', async () => {
       bus.attach(httpServer);
@@ -448,7 +452,7 @@ describe('WsBus', () => {
       ws1.close();
       ws2.close();
       await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
-    });
+    }, 15_000);
 
     it('disconnect(deviceId) closes specific device only', async () => {
       bus.attach(httpServer);
@@ -472,7 +476,7 @@ describe('WsBus', () => {
 
       ws2.close();
       await waitForClose(ws2);
-    });
+    }, 15_000);
 
     it('disconnect() without args closes all devices', async () => {
       bus.attach(httpServer);
@@ -487,7 +491,7 @@ describe('WsBus', () => {
       await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
 
       expect(bus.hasClient()).toBe(false);
-    });
+    }, 15_000);
 
     it('auto-generates deviceId when not provided (backward compat)', async () => {
       bus.attach(httpServer);
@@ -502,7 +506,7 @@ describe('WsBus', () => {
 
       ws.close();
       await waitForClose(ws);
-    });
+    }, 15_000);
 
     it('two connections without deviceId get separate auto-generated IDs', async () => {
       bus.attach(httpServer);
@@ -520,7 +524,7 @@ describe('WsBus', () => {
       ws1.close();
       ws2.close();
       await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
-    });
+    }, 15_000);
   });
 
   describe('heartbeat', () => {

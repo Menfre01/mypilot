@@ -31,7 +31,7 @@ export class HookHandler {
   private sessionStore: SessionStore;
   private pendingStore: PendingStore;
   private wsBus: WsBus;
-  private mode: GatewayMode = 'takeover';
+  private mode: GatewayMode = 'bystander';
   private eventLogger: EventLogger | null;
   private _seq = 0;
   private eventHistory: { sessionId: string; event: SSEHookEvent }[] = [];
