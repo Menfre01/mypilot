@@ -1,5 +1,9 @@
 ## Development
 
+### Task Execution
+
+Large tasks must be decomposed into small, independent waves that can be parallelized using multiple Agent tool calls. Each wave groups independent subtasks; depend on prior wave results before launching the next.
+
 ### TDD Flow
 
 Write tests first, then implement.
@@ -39,3 +43,8 @@ Data dir: `~/.mypilot/`
 ### 参考资料
 
 - Claude Code Hooks 文档: https://code.claude.com/docs/en/hooks
+
+### 关联项目
+
+- **客户端项目**: `../cc-notify/` — Flutter 移动端应用
+- **架构**: 本项目为服务端，cc-notify 为客户端，采用 C/S 架构

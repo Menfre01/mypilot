@@ -1,10 +1,21 @@
 // ── Pairing ──
 
+export type LinkType = 'lan' | 'tunnel' | 'wss' | 'relay-official' | 'relay-private';
+
+export interface LinkConfig {
+  id: string; // stable identifier e.g. "lan-default", "ngrok-1"
+  type: LinkType;
+  label: string; // human-readable: "Home LAN", "ngrok Tunnel"
+  url: string; // full WS URL base: "ws://192.168.1.100:16321" or "wss://xxx.ngrok-free.app"
+  enabled: boolean; // whether to include in QR/pairing
+}
+
 /** QR code payload: gateway connection info. */
 export interface PairingInfo {
   h: string; // host (LAN IP or domain for NAT traversal)
   p: number; // port
   k: string; // base64-encoded 32-byte AES-256 key (used for both auth and encryption)
+  links?: LinkConfig[]; // optional multi-link configuration
 }
 
 /** Encrypted message envelope for WebSocket communication. */

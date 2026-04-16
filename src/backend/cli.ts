@@ -8,6 +8,7 @@ import { createServer } from "./gateway/server.js";
 import { getOrCreateKey, detectLanIP } from "./gateway/token-store.js";
 import { displayConnectionInfo } from "./gateway/qr-display.js";
 import { mergeHooksIntoSettings, buildHooksConfig } from "./gateway/hooks-config.js";
+import { loadLinksConfig, saveLinksConfig } from "./gateway/link-config.js";
 
 export const PID_DIR = join(homedir(), ".mypilot");
 export const PID_PATH = join(PID_DIR, "gateway.pid");
@@ -44,6 +45,12 @@ function printUsage(): void {
   console.log("  pair-info   Show pairing info (IP + QR code)");
   console.log("              Optional: pair-info <domain[:port]> for NAT traversal");
   console.log("  init-hooks  Configure Claude Code hooks");
+  console.log("  link        Manage communication links");
+  console.log("              link list");
+  console.log("              link add <type> <url> [--label <label>]");
+  console.log("              link remove <id>");
+  console.log("              link enable <id>");
+  console.log("              link disable <id>");
 }
 
 async function startGateway(pidDir: string, pidPath: string): Promise<void> {
@@ -69,7 +76,8 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
   // Display connection info with QR code
   const lanIP = detectLanIP();
   console.log(`Gateway running at http://localhost:${DEFAULT_PORT}`);
-  displayConnectionInfo(lanIP, DEFAULT_PORT, key);
+  const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
+  displayConnectionInfo(lanIP, DEFAULT_PORT, key, links);
 
   // Handle SIGINT for graceful shutdown
   process.on("SIGINT", async () => {
@@ -134,7 +142,8 @@ async function startBackground(pidDir: string, pidPath: string): Promise<void> {
       console.log(`Gateway started in background (PID ${pid})`);
       console.log(`  URL: http://localhost:${DEFAULT_PORT}`);
       console.log(`  Log: ${logFile}`);
-      displayConnectionInfo(lanIP, DEFAULT_PORT, key);
+      const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
+      displayConnectionInfo(lanIP, DEFAULT_PORT, key, links);
       return;
     }
     // Check if child itself crashed before writing PID
@@ -270,7 +279,8 @@ async function showPairInfo(pidDir: string, domainArg?: string): Promise<void> {
     ? parseDomainArg(domainArg)
     : { host: detectLanIP(), port: DEFAULT_PORT };
   console.log(`MyPilot Gateway pairing info:`);
-  displayConnectionInfo(host, port, key);
+  const links = loadLinksConfig(pidDir, detectLanIP(), DEFAULT_PORT);
+  displayConnectionInfo(host, port, key, links);
 }
 
 async function initHooks(settingsPath: string): Promise<void> {
@@ -330,6 +340,87 @@ function promptYesNo(question: string): Promise<boolean> {
   });
 }
 
+function handleLinkCommand(pidDir: string, args: string[]): void {
+  const subCommand = args[0];
+  if (!subCommand || subCommand === 'list') {
+    const links = loadLinksConfig(pidDir, detectLanIP(), DEFAULT_PORT);
+    if (links.length === 0) {
+      console.log('No links configured.');
+      return;
+    }
+    console.log('');
+    console.log('Configured Links:');
+    for (const link of links) {
+      const status = link.enabled ? 'enabled' : 'disabled';
+      const active = link.id === 'lan-default' ? ' (default)' : '';
+      console.log(`  [${link.type}] ${link.label}: ${link.url} (${status}${active})`);
+    }
+    console.log('');
+    return;
+  }
+
+  if (subCommand === 'add') {
+    const type = args[1];
+    const url = args[2];
+    if (!type || !url) {
+      console.error('Usage: mypilot link add <type> <url> [--label <label>]');
+      process.exit(1);
+    }
+    const validTypes = ['lan', 'tunnel', 'wss', 'relay-official', 'relay-private'];
+    if (!validTypes.includes(type)) {
+      console.error(`Invalid type: ${type}. Valid types: ${validTypes.join(', ')}`);
+      process.exit(1);
+    }
+    const labelIdx = args.indexOf('--label');
+    const label = labelIdx !== -1 && args[labelIdx + 1] ? args[labelIdx + 1]! : type;
+    const id = `${type}-${Date.now()}`;
+    const links = loadLinksConfig(pidDir, detectLanIP(), DEFAULT_PORT);
+    links.push({ id, type: type as any, label, url, enabled: true });
+    saveLinksConfig(pidDir, links);
+    console.log(`Added link: [${type}] ${label} (${url})`);
+    return;
+  }
+
+  if (subCommand === 'remove') {
+    const id = args[1];
+    if (!id) {
+      console.error('Usage: mypilot link remove <id>');
+      process.exit(1);
+    }
+    const links = loadLinksConfig(pidDir, detectLanIP(), DEFAULT_PORT);
+    const idx = links.findIndex(l => l.id === id);
+    if (idx === -1) {
+      console.error(`Link not found: ${id}`);
+      process.exit(1);
+    }
+    const removed = links.splice(idx, 1)[0];
+    saveLinksConfig(pidDir, links);
+    console.log(`Removed link: ${removed.label}`);
+    return;
+  }
+
+  if (subCommand === 'enable' || subCommand === 'disable') {
+    const id = args[1];
+    if (!id) {
+      console.error(`Usage: mypilot link ${subCommand} <id>`);
+      process.exit(1);
+    }
+    const links = loadLinksConfig(pidDir, detectLanIP(), DEFAULT_PORT);
+    const link = links.find(l => l.id === id);
+    if (!link) {
+      console.error(`Link not found: ${id}`);
+      process.exit(1);
+    }
+    link.enabled = subCommand === 'enable';
+    saveLinksConfig(pidDir, links);
+    console.log(`${subCommand === 'enable' ? 'Enabled' : 'Disabled'}: ${link.label}`);
+    return;
+  }
+
+  console.error(`Unknown link sub-command: ${subCommand}`);
+  process.exit(1);
+}
+
 export async function runCli(
   argv: string[],
   pidDir: string = PID_DIR,
@@ -361,6 +452,9 @@ export async function runCli(
       break;
     case "init-hooks":
       await initHooks(settingsPath);
+      break;
+    case "link":
+      handleLinkCommand(pidDir, argv.slice(3));
       break;
     default:
       printUsage();

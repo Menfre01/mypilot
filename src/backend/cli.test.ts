@@ -25,6 +25,19 @@ vi.mock("./gateway/qr-display.js", () => ({
   displayConnectionInfo: vi.fn(),
 }));
 
+vi.mock("./gateway/link-config.js", () => ({
+  loadLinksConfig: vi.fn(() => [
+    {
+      id: 'lan-default',
+      type: 'lan',
+      label: 'LAN Direct',
+      url: 'ws://192.168.1.100:16321',
+      enabled: true,
+    },
+  ]),
+  saveLinksConfig: vi.fn(),
+}));
+
 vi.mock("./gateway/hooks-config.js", () => ({
   mergeHooksIntoSettings: vi.fn(() => ({
     added: ["PreToolUse", "Notification"],
@@ -163,10 +176,12 @@ describe("runCli", () => {
 
     it("displays connection info on startup", async () => {
       const { displayConnectionInfo } = await import("./gateway/qr-display.js");
+      const { loadLinksConfig } = await import("./gateway/link-config.js");
 
       await runCli(makeArgv("gateway"), testPidDir, testPidPath);
 
-      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY);
+      const expectedLinks = loadLinksConfig(testPidDir, "192.168.1.100", DEFAULT_PORT);
+      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY, expectedLinks);
     });
 
     it("writes PID file on start", async () => {
@@ -316,7 +331,9 @@ describe("runCli", () => {
       await runCli(makeArgv("pair-info"), testPidDir, testPidPath);
 
       const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY);
+      const { loadLinksConfig } = await import("./gateway/link-config.js");
+      const expectedLinks = loadLinksConfig(testPidDir, "192.168.1.100", DEFAULT_PORT);
+      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY, expectedLinks);
     });
 
     it("shows pairing header in output", async () => {
@@ -336,7 +353,9 @@ describe("runCli", () => {
       await runCli(makeArgv("pair-info", "tunnel.example.com"), testPidDir, testPidPath);
 
       const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      expect(displayConnectionInfo).toHaveBeenCalledWith("tunnel.example.com", 443, MOCK_KEY);
+      const { loadLinksConfig } = await import("./gateway/link-config.js");
+      const expectedLinks = loadLinksConfig(testPidDir, "192.168.1.100", DEFAULT_PORT);
+      expect(displayConnectionInfo).toHaveBeenCalledWith("tunnel.example.com", 443, MOCK_KEY, expectedLinks);
     });
 
     it("parses host:port when domain includes port", async () => {
@@ -346,7 +365,9 @@ describe("runCli", () => {
       await runCli(makeArgv("pair-info", "tunnel.example.com:8080"), testPidDir, testPidPath);
 
       const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      expect(displayConnectionInfo).toHaveBeenCalledWith("tunnel.example.com", 8080, MOCK_KEY);
+      const { loadLinksConfig } = await import("./gateway/link-config.js");
+      const expectedLinks = loadLinksConfig(testPidDir, "192.168.1.100", DEFAULT_PORT);
+      expect(displayConnectionInfo).toHaveBeenCalledWith("tunnel.example.com", 8080, MOCK_KEY, expectedLinks);
     });
 
     it("uses LAN IP when domain is not provided", async () => {
@@ -356,7 +377,9 @@ describe("runCli", () => {
       await runCli(makeArgv("pair-info"), testPidDir, testPidPath);
 
       const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY);
+      const { loadLinksConfig } = await import("./gateway/link-config.js");
+      const expectedLinks = loadLinksConfig(testPidDir, "192.168.1.100", DEFAULT_PORT);
+      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY, expectedLinks);
     });
   });
 
