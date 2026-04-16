@@ -14,12 +14,12 @@
 MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你的 iPhone。在接管模式下，你可以直接在手机上审批权限、回答问题、提交 Prompt。
 
 <p align="center">
-<img src="assets/iphone-sessions.png" width="220" alt="iPhone 上的会话列表" />
+<img src="assets/iphone-welcome.png" width="220" alt="iPhone 上的欢迎页" />
 <img src="assets/iphone-events.png" width="220" alt="iPhone 上的实时事件流" />
 <img src="assets/iphone-interact.png" width="220" alt="iPhone 上的接管交互" />
 </p>
 
-<p align="center"><strong>iPhone</strong> — 会话列表 · 实时事件 · 接管模式</p>
+<p align="center"><strong>iPhone</strong> — 欢迎页 · 实时事件 · 接管模式</p>
 
 ## 环境要求
 
