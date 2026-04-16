@@ -2,7 +2,7 @@ import { createServer as createHttpServer, type Server, type IncomingMessage, ty
 import { SessionStore } from './session-store.js';
 import { PendingStore } from './pending-store.js';
 import { WsBus } from './ws-bus.js';
-import { HookHandler } from './hook-handler.js';
+import { HookHandler, HttpError } from './hook-handler.js';
 import { EventLogger } from './event-logger.js';
 import type { ClientMessage } from '../../shared/protocol.js';
 
@@ -54,16 +54,12 @@ export function createServer(port: number, logDir: string, key: Buffer): Gateway
     if (req.method === 'POST' && url.pathname === '/hook') {
       try {
         const body = await collectBody(req);
-        try {
-          JSON.parse(body);
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON body' });
-          return;
-        }
         const result = await hookHandler.handleEvent(body);
         sendJSON(res, 200, result);
       } catch (err) {
-        sendJSON(res, 500, { error: (err as Error).message });
+        const status = err instanceof HttpError ? err.status : 500;
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        sendJSON(res, status, { error: message });
       }
       return;
     }

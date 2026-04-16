@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LinkConfig } from '../../shared/protocol.js';
 
@@ -8,16 +8,13 @@ export function loadLinksConfig(
   defaultPort: number,
 ): LinkConfig[] {
   const filePath = join(configDir, 'links.json');
-  if (!existsSync(filePath)) {
-    const defaults = [createDefaultLink(defaultHost, defaultPort)];
-    saveLinksConfig(configDir, defaults);
-    return defaults;
-  }
   try {
     const raw = readFileSync(filePath, 'utf-8');
     const data = JSON.parse(raw);
     return (data.links as LinkConfig[]).map(normalizeLink);
-  } catch {
+  } catch (err) {
+    const errno = err as NodeJS.ErrnoException;
+    if (errno.code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
     const defaults = [createDefaultLink(defaultHost, defaultPort)];
     saveLinksConfig(configDir, defaults);
     return defaults;

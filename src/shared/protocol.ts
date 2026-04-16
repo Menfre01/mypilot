@@ -1,6 +1,8 @@
 // ── Pairing ──
 
-export type LinkType = 'lan' | 'tunnel' | 'wss' | 'relay-official' | 'relay-private';
+export const VALID_LINK_TYPES = ['lan', 'tunnel', 'wss', 'relay-official', 'relay-private'] as const;
+
+export type LinkType = (typeof VALID_LINK_TYPES)[number];
 
 export interface LinkConfig {
   id: string; // stable identifier e.g. "lan-default", "ngrok-1"

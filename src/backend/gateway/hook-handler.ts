@@ -13,6 +13,14 @@ import type {
   GatewayMessage,
 } from '../../shared/protocol.js';
 
+export class HttpError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 interface RawHookEvent {
   session_id: string;
   hook_event_name: string;
@@ -56,56 +64,45 @@ export class HookHandler {
   }
 
   async handleEvent(body: string): Promise<InteractionResponse> {
-    // 1. Parse JSON
     let event: RawHookEvent;
     try {
       event = JSON.parse(body) as RawHookEvent;
     } catch {
-      throw new Error('Invalid JSON body');
+      throw new HttpError('Invalid JSON body', 400);
     }
 
-    // 2. Extract session_id (required)
     const sessionId = event.session_id;
     if (!sessionId || typeof sessionId !== 'string') {
-      throw new Error('Missing or invalid session_id');
+      throw new HttpError('Missing or invalid session_id', 400);
     }
 
-    // 3. Extract event_name (Claude Code sends hook_event_name)
     const eventName = event.hook_event_name;
 
-    // 4. Register session (broadcast session_start for any new session)
     const isNewSession = !this.sessionStore.has(sessionId);
     const sessionInfo = this.sessionStore.register(sessionId);
 
-    // 5. Build the SSEHookEvent with normalized event_name field + unique event_id
     const seq = ++this._seq;
     const eventId = seq.toString(36);
     const hookEvent: SSEHookEvent = { ...event, event_name: eventName, event_id: eventId };
 
-    // 6. Record in history buffer
     this.eventHistory.push({ sessionId, event: hookEvent });
     if (this.eventHistory.length > this.maxHistory) {
       this.eventHistory.shift();
     }
 
-    // 6.5 Persist to log file
     this.eventLogger?.log(sessionId, hookEvent, seq);
 
-    // 7. Notify frontend of new session (defensive: any event can introduce a session)
     if (isNewSession) {
       this.wsBus.broadcast({ type: 'session_start', session: sessionInfo });
     }
 
-    // 8. Takeover mode + user interaction events or interactive PreToolUse: block
     if (this.mode === 'takeover' && (isUserInteractionEvent(eventName) || isInteractivePreToolUse(eventName, hookEvent))) {
       this.wsBus.broadcast({ type: 'event', sessionId, event: hookEvent });
       return this.pendingStore.waitForResponse(sessionId, eventId, hookEvent);
     }
 
-    // 9. Broadcast event to frontend (bystander mode + non-blocking events)
     this.wsBus.broadcast({ type: 'event', sessionId, event: hookEvent });
 
-    // 10. Handle session end
     if (eventName === 'SessionEnd') {
       this.wsBus.broadcast({ type: 'session_end', sessionId });
       this.sessionStore.unregister(sessionId);
@@ -113,7 +110,6 @@ export class HookHandler {
       return {};
     }
 
-    // All other events — return {} immediately
     return {};
   }
 

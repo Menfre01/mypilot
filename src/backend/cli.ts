@@ -9,6 +9,7 @@ import { getOrCreateKey, detectLanIP } from "./gateway/token-store.js";
 import { displayConnectionInfo } from "./gateway/qr-display.js";
 import { mergeHooksIntoSettings, buildHooksConfig } from "./gateway/hooks-config.js";
 import { loadLinksConfig, saveLinksConfig } from "./gateway/link-config.js";
+import { VALID_LINK_TYPES, type LinkType } from "../shared/protocol.js";
 
 export const PID_DIR = join(homedir(), ".mypilot");
 export const PID_PATH = join(PID_DIR, "gateway.pid");
@@ -366,16 +367,15 @@ function handleLinkCommand(pidDir: string, args: string[]): void {
       console.error('Usage: mypilot link add <type> <url> [--label <label>]');
       process.exit(1);
     }
-    const validTypes = ['lan', 'tunnel', 'wss', 'relay-official', 'relay-private'];
-    if (!validTypes.includes(type)) {
-      console.error(`Invalid type: ${type}. Valid types: ${validTypes.join(', ')}`);
+    if (!VALID_LINK_TYPES.includes(type as LinkType)) {
+      console.error(`Invalid type: ${type}. Valid types: ${VALID_LINK_TYPES.join(', ')}`);
       process.exit(1);
     }
     const labelIdx = args.indexOf('--label');
     const label = labelIdx !== -1 && args[labelIdx + 1] ? args[labelIdx + 1]! : type;
     const id = `${type}-${Date.now()}`;
     const links = loadLinksConfig(pidDir, detectLanIP(), DEFAULT_PORT);
-    links.push({ id, type: type as any, label, url, enabled: true });
+    links.push({ id, type: type as LinkType, label, url, enabled: true });
     saveLinksConfig(pidDir, links);
     console.log(`Added link: [${type}] ${label} (${url})`);
     return;
@@ -411,7 +411,12 @@ function handleLinkCommand(pidDir: string, args: string[]): void {
       console.error(`Link not found: ${id}`);
       process.exit(1);
     }
-    link.enabled = subCommand === 'enable';
+    const newState = subCommand === 'enable';
+    if (link.enabled === newState) {
+      console.log(`Already ${newState ? 'enabled' : 'disabled'}: ${link.label}`);
+      return;
+    }
+    link.enabled = newState;
     saveLinksConfig(pidDir, links);
     console.log(`${subCommand === 'enable' ? 'Enabled' : 'Disabled'}: ${link.label}`);
     return;
