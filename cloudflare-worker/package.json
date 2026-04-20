@@ -1,0 +1,16 @@
+{
+  "name": "mypilot-relay",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250416.0",
+    "wrangler": "^4.83.0",
+    "vitest": "^3.1.1",
+    "typescript": "^5.8.3"
+  }
+}

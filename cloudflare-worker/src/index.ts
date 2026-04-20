@@ -1,11 +1,10 @@
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Types (must stay in sync with src/shared/protocol.ts) ──────────────────────
 
 interface EncryptedEnvelope {
   iv: string;
   data: string;
 }
 
-// Re-exported gateway protocol types (must stay in sync with src/shared/protocol.ts)
 interface SessionInfo {
   id: string;
   color: string;
@@ -52,13 +51,14 @@ export class Hub implements DurableObject {
   private apps = new Map<string, WebSocket>();
   private gatewayKeys = new Map<string, string>();
   private seq = 0;
+  private env: Environment;
+
+  constructor(_ctx: DurableObjectState, env: Environment) {
+    this.env = env;
+  }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-
-    if (request.method === 'POST' && url.pathname === '/hook') {
-      return this.handleHook(request);
-    }
 
     if (request.method === 'GET' && url.pathname === '/health') {
       return new Response(JSON.stringify({ ok: true, gateways: this.gateways.size }), {
@@ -81,52 +81,21 @@ export class Hub implements DurableObject {
 
     const upgrade = request.headers.get('upgrade');
     if (upgrade === 'websocket') {
-      const isApp = url.searchParams.get('app') === '1';
-      return this.handleWebSocket(request, isApp);
+      return this.handleWebSocket(url);
     }
 
     return new Response('Not Found', { status: 404 });
   }
 
-  private async handleHook(request: Request): Promise<Response> {
-    const body = await request.text();
-    let hookEvent: SSEHookEvent;
-    try {
-      hookEvent = JSON.parse(body);
-    } catch {
-      return new Response('Invalid JSON', { status: 400 });
-    }
-
-    const msg: GatewayMessage = {
-      type: 'event',
-      sessionId: hookEvent.session_id,
-      event: hookEvent,
-    };
-
-    const deadGateways: string[] = [];
-    for (const [id, ws] of this.gateways) {
-      try {
-        ws.send(JSON.stringify(msg));
-      } catch {
-        deadGateways.push(id);
-      }
-    }
-    for (const id of deadGateways) {
-      this.gateways.delete(id);
-      this.gatewayKeys.delete(id);
-    }
-
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  private async handleWebSocket(request: Request, isApp: boolean): Promise<Response> {
-    const url = new URL(request.url);
-    const gatewayId = url.searchParams.get('gatewayId') ?? '';
+  private handleWebSocket(url: URL): Response {
     const key = url.searchParams.get('key') ?? '';
     const lastEventSeqParam = url.searchParams.get('lastEventSeq');
     const lastEventSeq = lastEventSeqParam != null ? Number(lastEventSeqParam) : undefined;
+
+    const isApp = url.pathname === '/ws-gateway' || url.searchParams.get('app') === '1';
+    const gatewayId = isApp
+      ? (url.searchParams.get('gatewayId') || key.slice(0, 16))
+      : (url.searchParams.get('gatewayId') ?? '');
 
     if (!gatewayId || !key) {
       return new Response('Missing gatewayId or key', { status: 400 });
@@ -137,7 +106,11 @@ export class Hub implements DurableObject {
         return new Response('Gateway not connected', { status: 503 });
       }
       const storedKey = this.gatewayKeys.get(gatewayId);
-      if (storedKey !== undefined && storedKey !== key) {
+      if (!storedKey || storedKey !== key) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+    } else {
+      if (!this.env.GATEWAY_KEY || key !== this.env.GATEWAY_KEY) {
         return new Response('Unauthorized', { status: 401 });
       }
     }
@@ -177,12 +150,12 @@ export class Hub implements DurableObject {
         return;
       }
 
-      const envelope = payload as WsEnvelope;
-      if (!envelope || !envelope.encrypted) return;
+      const wrapper = payload as WsEnvelope;
+      if (!wrapper || !wrapper.encrypted) return;
 
       const appWs = this.apps.get(gatewayId);
       if (appWs && appWs.readyState === WebSocket.OPEN) {
-        appWs.send(event.data as string);
+        appWs.send(JSON.stringify(wrapper.encrypted));
       }
     });
 
@@ -202,12 +175,12 @@ export class Hub implements DurableObject {
         return;
       }
 
-      const envelope = payload as WsEnvelope;
-      if (!envelope || !envelope.encrypted) return;
+      const envelope = payload as EncryptedEnvelope;
+      if (!envelope || !envelope.iv || !envelope.data) return;
 
       const gatewayWs = this.gateways.get(gatewayId);
       if (gatewayWs && gatewayWs.readyState === WebSocket.OPEN) {
-        gatewayWs.send(event.data as string);
+        gatewayWs.send(JSON.stringify({ encrypted: envelope }));
       }
     });
 
@@ -230,12 +203,13 @@ export class Hub implements DurableObject {
 
 export default {
   async fetch(request: Request, env: Environment): Promise<Response> {
-    const hubId = env.MYPILOT_relay.idFromName('hub');
-    const hub = env.MYPILOT_relay.get(hubId);
+    const hubId = env.MYPILOT_RELAY.idFromName('hub');
+    const hub = env.MYPILOT_RELAY.get(hubId);
     return hub.fetch(request);
   },
 };
 
 interface Environment {
-  MYPILOT_relay: DurableObjectNamespace<Hub>;
+  MYPILOT_RELAY: DurableObjectNamespace;
+  GATEWAY_KEY: string;
 }
