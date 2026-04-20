@@ -307,6 +307,17 @@ describe("runCli", () => {
       const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
       expect(output).toContain(String(DEFAULT_PORT));
     });
+
+    it("detects PID reuse when start time mismatches", async () => {
+      mkdirSync(testPidDir, { recursive: true });
+      // Write PID file with a wrong start time to simulate PID reuse
+      writeFileSync(testPidPath, `${process.pid}\nfake-start-time`, "utf-8");
+
+      await runCli(makeArgv("status"), testPidDir, testPidPath);
+
+      const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(output).toMatch(/not running/i);
+    });
   });
 
   // ── pair-info command ──

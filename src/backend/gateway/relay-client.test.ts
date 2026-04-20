@@ -11,6 +11,7 @@ interface MockWs {
   _emit: (event: string, ...args: unknown[]) => void;
   send: (data: string) => void;
   close: () => void;
+  ping: () => void;
 }
 
 function createMockWs(): MockWs {
@@ -32,6 +33,7 @@ function createMockWs(): MockWs {
       this.readyState = 3;
       this._emit('close');
     },
+    ping() {},
   };
 }
 

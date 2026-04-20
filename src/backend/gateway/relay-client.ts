@@ -1,5 +1,6 @@
 import type { ClientMessage, GatewayMessage, EncryptedEnvelope } from '../../shared/protocol.js';
 import { encrypt, decrypt } from './crypto.js';
+import WS from 'ws';
 
 export interface RelayClient {
   connect(relayUrl: string, gatewayId: string, key: Buffer): Promise<void>;
@@ -12,14 +13,15 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const MAX_RETRIES = 5;
 const CONNECTION_TIMEOUT_MS = 10_000;
+const HEARTBEAT_INTERVAL_MS = 25_000;
 const WS_OPEN = 1;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type WsLike = { on(event: string, cb: (...args: any[]) => void): void; send(data: string): void; close(): void; readyState: number };
+type WsLike = { on(event: string, cb: (...args: any[]) => void): void; send(data: string): void; close(): void; readyState: number; ping(data?: unknown, mask?: boolean, cb?: (err: Error) => void): void };
 type WebSocketFactory = (url: string) => WsLike;
 
 export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
-  const createSocket: WebSocketFactory = wsFactory ?? ((url: string) => new WebSocket(url) as unknown as WsLike);
+  const createSocket: WebSocketFactory = wsFactory ?? ((url: string) => new WS(url) as unknown as WsLike);
 
   let ws: WsLike | null = null;
   let gatewayId = '';
@@ -29,7 +31,15 @@ export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
   let messageHandler: ((msg: ClientMessage, deviceId: string) => void) | null = null;
   let retryCount = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let intentionallyDisconnected = false;
+
+  function clearHeartbeat(): void {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  }
 
   function scheduleReconnect(): void {
     if (intentionallyDisconnected || retryCount >= MAX_RETRIES) return;
@@ -66,6 +76,19 @@ export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
         clearTimeout(timeout);
         ws = sock;
         retryCount = 0;
+
+        // Heartbeat to keep NAT/ISP from silently dropping the relay connection
+        clearHeartbeat();
+        heartbeatTimer = setInterval(() => {
+          if (sock.readyState === WS_OPEN) {
+            try {
+              sock.ping();
+            } catch {
+              // Ping failed — connection broken, will be cleaned up by close handler
+            }
+          }
+        }, HEARTBEAT_INTERVAL_MS);
+
         resolve();
       });
 
@@ -93,6 +116,7 @@ export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
 
       sock.on('close', () => {
         ws = null;
+        clearHeartbeat();
         if (!intentionallyDisconnected) {
           scheduleReconnect();
         }
@@ -125,6 +149,7 @@ export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
+      clearHeartbeat();
       if (ws) {
         ws.close();
         ws = null;

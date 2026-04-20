@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync, realpathSync, openSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, platform } from "node:os";
+import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import { createServer } from "./gateway/server.js";
@@ -16,23 +17,58 @@ export const PID_PATH = join(PID_DIR, "gateway.pid");
 export const DEFAULT_PORT = 16321;
 export const SETTINGS_PATH = join(homedir(), ".claude", "settings.json");
 
-function readPidFile(pidPath: string): number | null {
+interface PidInfo {
+  pid: number;
+  startTime: string | undefined;
+}
+
+function readPidFile(pidPath: string): PidInfo | null {
   try {
     const content = readFileSync(pidPath, "utf-8").trim();
-    const pid = parseInt(content, 10);
-    return Number.isNaN(pid) ? null : pid;
+    const lines = content.split("\n");
+    const pid = parseInt(lines[0]!, 10);
+    if (Number.isNaN(pid)) return null;
+    const startTime = lines[1]?.trim();
+    return { pid, startTime: startTime || undefined };
   } catch {
     return null;
   }
 }
 
-function isProcessAlive(pid: number): boolean {
+function writePidFile(pidPath: string, pid: number): void {
+  const startTime = getProcessStartTime(pid) ?? "";
+  writeFileSync(pidPath, `${pid}\n${startTime}`, "utf-8");
+}
+
+const IS_LINUX = platform() === "linux";
+
+function getProcessStartTime(pid: number): string | null {
+  try {
+    if (IS_LINUX) {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf-8").trim();
+      // comm (field 2) can contain spaces; find closing ')' to get reliable field index
+      const closeParen = stat.lastIndexOf(')');
+      if (closeParen === -1) return null;
+      const afterComm = stat.slice(closeParen + 2).split(" ");
+      // starttime is field 22 (1-indexed), but after removing pid and comm it's at index 19
+      return afterComm[19] ?? null;
+    }
+    const result = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf-8" }).trim();
+    return result || null;
+  } catch {
+    return null;
+  }
+}
+
+function isProcessAlive(pid: number, expectedStartTime?: string): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  if (!expectedStartTime) return true;
+  const actualStartTime = getProcessStartTime(pid);
+  return actualStartTime === expectedStartTime;
 }
 
 function printUsage(): void {
@@ -56,8 +92,8 @@ function printUsage(): void {
 
 async function startGateway(pidDir: string, pidPath: string): Promise<void> {
   const existingPid = readPidFile(pidPath);
-  if (existingPid !== null && isProcessAlive(existingPid)) {
-    console.error(`Gateway is already running (PID ${existingPid})`);
+  if (existingPid !== null && isProcessAlive(existingPid.pid, existingPid.startTime)) {
+    console.error(`Gateway is already running (PID ${existingPid.pid})`);
     process.exit(1);
   }
 
@@ -72,10 +108,10 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
   const cloudflareLink = links.find((l) => l.type === 'cloudflare' && l.enabled);
   const server = createServer(DEFAULT_PORT, logDir, key, cloudflareLink);
 
-  await server.start();
+  // Write PID file early so startBackground detects it before relay connect
+  writePidFile(pidPath, process.pid);
 
-  // Write PID file
-  writeFileSync(pidPath, String(process.pid), "utf-8");
+  await server.start();
 
   // Display connection info with QR code
   console.log(`Gateway running at http://localhost:${DEFAULT_PORT}`);
@@ -105,8 +141,8 @@ function resolveSelfScriptPath(): string {
 
 async function startBackground(pidDir: string, pidPath: string): Promise<void> {
   const existingPid = readPidFile(pidPath);
-  if (existingPid !== null && isProcessAlive(existingPid)) {
-    console.error(`Gateway is already running (PID ${existingPid})`);
+  if (existingPid !== null && isProcessAlive(existingPid.pid, existingPid.startTime)) {
+    console.error(`Gateway is already running (PID ${existingPid.pid})`);
     process.exit(1);
   }
 
@@ -136,11 +172,11 @@ async function startBackground(pidDir: string, pidPath: string): Promise<void> {
 
   while (attempts < maxAttempts) {
     await new Promise((r) => setTimeout(r, intervalMs));
-    const pid = readPidFile(pidPath);
-    if (pid !== null && isProcessAlive(pid)) {
+    const info = readPidFile(pidPath);
+    if (info !== null && isProcessAlive(info.pid, info.startTime)) {
       const lanIP = detectLanIP();
       const key = getOrCreateKey(pidDir);
-      console.log(`Gateway started in background (PID ${pid})`);
+      console.log(`Gateway started in background (PID ${info.pid})`);
       console.log(`  URL: http://localhost:${DEFAULT_PORT}`);
       console.log(`  Log: ${logFile}`);
       const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
@@ -162,14 +198,14 @@ async function startBackground(pidDir: string, pidPath: string): Promise<void> {
 }
 
 async function stopGateway(pidPath: string): Promise<void> {
-  const pid = readPidFile(pidPath);
+  const info = readPidFile(pidPath);
 
-  if (pid === null) {
+  if (info === null) {
     console.log("Gateway is not running");
     return;
   }
 
-  if (!isProcessAlive(pid)) {
+  if (!isProcessAlive(info.pid, info.startTime)) {
     // Stale PID file, clean it up
     try {
       unlinkSync(pidPath);
@@ -182,7 +218,7 @@ async function stopGateway(pidPath: string): Promise<void> {
 
   // Send SIGTERM for graceful shutdown
   try {
-    process.kill(pid, "SIGTERM");
+    process.kill(info.pid, "SIGTERM");
   } catch {
     // Process may have died between check and kill
     try {
@@ -201,7 +237,7 @@ async function stopGateway(pidPath: string): Promise<void> {
 
   while (attempts < maxAttempts) {
     await new Promise((r) => setTimeout(r, intervalMs));
-    if (!isProcessAlive(pid)) {
+    if (!isProcessAlive(info.pid)) {
       try {
         unlinkSync(pidPath);
       } catch {
@@ -215,7 +251,7 @@ async function stopGateway(pidPath: string): Promise<void> {
 
   // Force kill
   try {
-    process.kill(pid, "SIGKILL");
+    process.kill(info.pid, "SIGKILL");
   } catch {
     // ignore
   }
@@ -229,19 +265,19 @@ async function stopGateway(pidPath: string): Promise<void> {
 }
 
 async function checkStatus(pidPath: string): Promise<void> {
-  const pid = readPidFile(pidPath);
+  const info = readPidFile(pidPath);
 
-  if (pid === null) {
+  if (info === null) {
     console.log("Gateway is not running");
     return;
   }
 
-  if (!isProcessAlive(pid)) {
+  if (!isProcessAlive(info.pid, info.startTime)) {
     console.log("Gateway is not running (stale PID file)");
     return;
   }
 
-  console.log(`Gateway is running (PID ${pid}, port ${DEFAULT_PORT})`);
+  console.log(`Gateway is running (PID ${info.pid}, port ${DEFAULT_PORT})`);
 }
 
 function parseDomainArg(domain: string): { host: string; port: number } {
@@ -356,7 +392,7 @@ function handleLinkCommand(pidDir: string, args: string[]): void {
     for (const link of links) {
       const status = link.enabled ? 'enabled' : 'disabled';
       const active = link.id === 'lan-default' ? ' (default)' : '';
-      console.log(`  [${link.type}] ${link.label}: ${link.url} (${status}${active})`);
+      console.log(`  ${link.id}\t[${link.type}] ${link.label}: ${link.url} (${status}${active})`);
     }
     console.log('');
     return;
