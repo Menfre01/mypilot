@@ -209,6 +209,13 @@ describe('link-config', () => {
           url: 'wss://custom.example.com:8443',
           enabled: true,
         },
+        {
+          id: 'cloudflare-relay',
+          type: 'cloudflare' as const,
+          label: 'Cloudflare Tunnel',
+          url: 'wss://mypilot-relay.workers.dev/gateway',
+          enabled: true,
+        },
       ];
 
       saveLinksConfig(tmpDir, original);

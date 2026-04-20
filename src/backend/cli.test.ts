@@ -162,6 +162,7 @@ describe("runCli", () => {
         DEFAULT_PORT,
         join(testPidDir, "logs"),
         MOCK_KEY,
+        undefined,
       );
     });
 

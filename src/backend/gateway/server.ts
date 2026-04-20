@@ -4,20 +4,47 @@ import { PendingStore } from './pending-store.js';
 import { WsBus } from './ws-bus.js';
 import { HookHandler, HttpError } from './hook-handler.js';
 import { EventLogger } from './event-logger.js';
-import type { ClientMessage } from '../../shared/protocol.js';
+import { createRelayClient } from './relay-client.js';
+import type { ClientMessage, GatewayMessage, LinkConfig } from '../../shared/protocol.js';
 
 export interface GatewayServer {
   start(): Promise<void>;
   stop(): Promise<void>;
 }
 
-export function createServer(port: number, logDir: string, key: Buffer): GatewayServer {
+export function createServer(
+  port: number,
+  logDir: string,
+  key: Buffer,
+  cloudflareLink?: LinkConfig,
+): GatewayServer {
   const sessionStore = new SessionStore();
   const pendingStore = new PendingStore();
   const wsBus = new WsBus(key);
   const eventLogger = new EventLogger(logDir);
-  const hookHandler = new HookHandler(sessionStore, pendingStore, wsBus, eventLogger);
+
+  const relayClient = cloudflareLink ? createRelayClient() : null;
   const keyB64 = key.toString('base64');
+  const gatewayId = keyB64.slice(0, 16);
+  const MAX_RECENT_EVENTS = 200;
+
+  function getRecentEvents(lastEventSeq?: number) {
+    return lastEventSeq != null
+      ? eventLogger.readEventsAfter(lastEventSeq, MAX_RECENT_EVENTS)
+      : hookHandler.getEventHistory();
+  }
+
+  const relayBroadcast = relayClient
+    ? (msg: GatewayMessage) => relayClient.broadcast(msg)
+    : undefined;
+
+  const hookHandler = new HookHandler(
+    sessionStore,
+    pendingStore,
+    wsBus,
+    eventLogger,
+    relayBroadcast,
+  );
 
   let httpServer: Server;
 
@@ -78,20 +105,21 @@ export function createServer(port: number, logDir: string, key: Buffer): Gateway
     res.end('Not Found');
   }
 
-  function broadcastSessionState(lastEventSeq?: number, targetDeviceId?: string): void {
+  function broadcastSessionState(lastEventSeq?: number, targetDeviceId?: string, cachedEvents?: ReturnType<typeof getRecentEvents>): void {
     // With checkpoint: only events after it (may be empty if up-to-date).
     // Without checkpoint (fresh install): full in-memory history.
-    const recentEvents = lastEventSeq != null
-      ? eventLogger.readEventsAfter(lastEventSeq, 200)
-      : hookHandler.getEventHistory();
-
-    wsBus.sendSessionList(
-      sessionStore.getAll(),
-      hookHandler.getMode(),
+    const recentEvents = cachedEvents ?? getRecentEvents(lastEventSeq);
+    const msg: GatewayMessage = {
+      type: 'connected',
+      sessions: sessionStore.getAll(),
+      mode: hookHandler.getMode(),
       recentEvents,
-      hookHandler.getPendingInteractions(),
-      targetDeviceId,
-    );
+      pendingInteractions: hookHandler.getPendingInteractions(),
+    };
+    wsBus.sendSessionList(msg.sessions, msg.mode, msg.recentEvents, msg.pendingInteractions, targetDeviceId);
+    if (relayClient && !targetDeviceId) {
+      relayClient.broadcast(msg);
+    }
   }
 
   function handleClientMessage(message: ClientMessage, deviceId: string): void {
@@ -105,8 +133,12 @@ export function createServer(port: number, logDir: string, key: Buffer): Gateway
       case 'interact':
         pendingStore.resolve(message.sessionId, message.eventId, message.response);
         break;
-      case 'request_sessions':
+      case 'request_sessions': {
         broadcastSessionState(message.lastEventSeq, deviceId);
+        break;
+      }
+      case 'delete_session':
+        hookHandler.deleteSession(message.sessionId);
         break;
     }
   }
@@ -128,6 +160,11 @@ export function createServer(port: number, logDir: string, key: Buffer): Gateway
         );
       });
 
+      if (relayClient) {
+        relayClient.onMessage(handleClientMessage);
+        await relayClient.connect(cloudflareLink!.url, gatewayId, key);
+      }
+
       return new Promise((resolve) => {
         httpServer.listen(port, resolve);
       });
@@ -135,6 +172,7 @@ export function createServer(port: number, logDir: string, key: Buffer): Gateway
 
     async stop(): Promise<void> {
       pendingStore.releaseAll();
+      relayClient?.disconnect();
       wsBus.close();
       return new Promise((resolve) => {
         if (httpServer) {

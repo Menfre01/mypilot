@@ -1,6 +1,6 @@
 // ── Pairing ──
 
-export const VALID_LINK_TYPES = ['lan', 'tunnel', 'wss', 'relay-official', 'relay-private'] as const;
+export const VALID_LINK_TYPES = ['lan', 'tunnel', 'wss', 'relay-official', 'relay-private', 'cloudflare'] as const;
 
 export type LinkType = (typeof VALID_LINK_TYPES)[number];
 
@@ -115,4 +115,5 @@ export type ClientMessage =
   | { type: 'takeover' }
   | { type: 'release' }
   | { type: 'interact'; sessionId: string; eventId: string; response: InteractionResponse }
-  | { type: 'request_sessions'; lastEventSeq?: number };
+  | { type: 'request_sessions'; lastEventSeq?: number }
+  | { type: 'delete_session'; sessionId: string };

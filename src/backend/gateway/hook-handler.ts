@@ -35,13 +35,28 @@ export class HookHandler {
   private eventLogger: EventLogger | null;
   private _seq = 0;
   private eventHistory: { sessionId: string; event: SSEHookEvent }[] = [];
+  private historyHead = 0;
   private maxHistory = 200;
+  private historyCache: { sessionId: string; event: SSEHookEvent }[] | null = null;
+  private relayBroadcaster?: (msg: GatewayMessage) => void;
 
-  constructor(sessionStore: SessionStore, pendingStore: PendingStore, wsBus: WsBus, eventLogger?: EventLogger) {
+  private broadcastAll(msg: GatewayMessage): void {
+    this.wsBus.broadcast(msg);
+    this.relayBroadcaster?.(msg);
+  }
+
+  constructor(
+    sessionStore: SessionStore,
+    pendingStore: PendingStore,
+    wsBus: WsBus,
+    eventLogger?: EventLogger,
+    relayBroadcaster?: (msg: GatewayMessage) => void,
+  ) {
     this.sessionStore = sessionStore;
     this.pendingStore = pendingStore;
     this.wsBus = wsBus;
     this.eventLogger = eventLogger ?? null;
+    this.relayBroadcaster = relayBroadcaster;
 
     // Restore event history, seq, and active sessions from JSONL logs on startup
     if (this.eventLogger) {
@@ -54,7 +69,6 @@ export class HookHandler {
         // Replay session registration (mirrors handleEvent auto-registration)
         this.sessionStore.register(entry.sessionId);
 
-        // Unregister ended sessions
         const eventName = entry.event.event_name as string | undefined;
         if (eventName === 'SessionEnd') {
           this.sessionStore.unregister(entry.sessionId);
@@ -85,40 +99,47 @@ export class HookHandler {
     const eventId = seq.toString(36);
     const hookEvent: SSEHookEvent = { ...event, event_name: eventName, event_id: eventId };
 
-    this.eventHistory.push({ sessionId, event: hookEvent });
-    if (this.eventHistory.length > this.maxHistory) {
-      this.eventHistory.shift();
+    if (this.eventHistory.length >= this.maxHistory) {
+      this.eventHistory[this.historyHead] = { sessionId, event: hookEvent };
+      this.historyHead = (this.historyHead + 1) % this.maxHistory;
+    } else {
+      this.eventHistory.push({ sessionId, event: hookEvent });
     }
+    this.historyCache = null;
 
     this.eventLogger?.log(sessionId, hookEvent, seq);
 
     if (isNewSession) {
-      this.wsBus.broadcast({ type: 'session_start', session: sessionInfo });
+      this.broadcastAll({ type: 'session_start', session: sessionInfo });
     }
 
+    this.broadcastAll({ type: 'event', sessionId, event: hookEvent });
+
     if (this.mode === 'takeover' && (isUserInteractionEvent(eventName) || isInteractivePreToolUse(eventName, hookEvent))) {
-      this.wsBus.broadcast({ type: 'event', sessionId, event: hookEvent });
       return this.pendingStore.waitForResponse(sessionId, eventId, hookEvent);
     }
 
-    this.wsBus.broadcast({ type: 'event', sessionId, event: hookEvent });
-
     if (eventName === 'SessionEnd') {
-      this.wsBus.broadcast({ type: 'session_end', sessionId });
-      this.sessionStore.unregister(sessionId);
-      this.pendingStore.releaseSession(sessionId);
+      this.deleteSession(sessionId);
       return {};
     }
 
     return {};
   }
 
+  deleteSession(sessionId: string): void {
+    this.broadcastAll({ type: 'session_end', sessionId });
+    this.sessionStore.unregister(sessionId);
+    this.pendingStore.releaseSession(sessionId);
+  }
+
   setMode(mode: GatewayMode): void {
+    if (this.mode === mode) return;
     if (this.mode === 'takeover' && mode === 'bystander') {
       this.pendingStore.releaseAll();
     }
     this.mode = mode;
-    this.wsBus.broadcast({ type: 'mode_changed', mode });
+    this.broadcastAll({ type: 'mode_changed', mode });
   }
 
   getMode(): GatewayMode {
@@ -126,7 +147,15 @@ export class HookHandler {
   }
 
   getEventHistory(): { sessionId: string; event: SSEHookEvent }[] {
-    return this.eventHistory;
+    if (this.historyCache) return this.historyCache;
+    if (this.eventHistory.length < this.maxHistory) {
+      return this.eventHistory;
+    }
+    this.historyCache = [
+      ...this.eventHistory.slice(this.historyHead),
+      ...this.eventHistory.slice(0, this.historyHead),
+    ];
+    return this.historyCache;
   }
 
   getPendingInteractions(): { sessionId: string; eventId: string; event: SSEHookEvent }[] {

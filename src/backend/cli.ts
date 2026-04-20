@@ -55,7 +55,6 @@ function printUsage(): void {
 }
 
 async function startGateway(pidDir: string, pidPath: string): Promise<void> {
-  // Check if already running
   const existingPid = readPidFile(pidPath);
   if (existingPid !== null && isProcessAlive(existingPid)) {
     console.error(`Gateway is already running (PID ${existingPid})`);
@@ -67,7 +66,11 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
   const key = getOrCreateKey(pidDir);
   const logDir = join(pidDir, "logs");
 
-  const server = createServer(DEFAULT_PORT, logDir, key);
+  // Detect LAN IP before starting server (needed for link config)
+  const lanIP = detectLanIP();
+  const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
+  const cloudflareLink = links.find((l) => l.type === 'cloudflare' && l.enabled);
+  const server = createServer(DEFAULT_PORT, logDir, key, cloudflareLink);
 
   await server.start();
 
@@ -75,9 +78,7 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
   writeFileSync(pidPath, String(process.pid), "utf-8");
 
   // Display connection info with QR code
-  const lanIP = detectLanIP();
   console.log(`Gateway running at http://localhost:${DEFAULT_PORT}`);
-  const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
   displayConnectionInfo(lanIP, DEFAULT_PORT, key, links);
 
   // Handle SIGINT for graceful shutdown
@@ -103,7 +104,6 @@ function resolveSelfScriptPath(): string {
 }
 
 async function startBackground(pidDir: string, pidPath: string): Promise<void> {
-  // Check if already running
   const existingPid = readPidFile(pidPath);
   if (existingPid !== null && isProcessAlive(existingPid)) {
     console.error(`Gateway is already running (PID ${existingPid})`);
@@ -148,7 +148,7 @@ async function startBackground(pidDir: string, pidPath: string): Promise<void> {
       return;
     }
     // Check if child itself crashed before writing PID
-    if (!isProcessAlive(childPid!)) {
+    if (childPid === undefined || !isProcessAlive(childPid)) {
       console.error("Gateway failed to start. Check log file:");
       console.error(`  ${logFile}`);
       process.exit(1);
@@ -276,11 +276,12 @@ async function showPairInfo(pidDir: string, domainArg?: string): Promise<void> {
     process.exit(1);
   }
 
+  const lanIP = detectLanIP();
   const { host, port } = domainArg
     ? parseDomainArg(domainArg)
-    : { host: detectLanIP(), port: DEFAULT_PORT };
+    : { host: lanIP, port: DEFAULT_PORT };
   console.log(`MyPilot Gateway pairing info:`);
-  const links = loadLinksConfig(pidDir, detectLanIP(), DEFAULT_PORT);
+  const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
   displayConnectionInfo(host, port, key, links);
 }
 
@@ -343,8 +344,9 @@ function promptYesNo(question: string): Promise<boolean> {
 
 function handleLinkCommand(pidDir: string, args: string[]): void {
   const subCommand = args[0];
+  const lanIP = detectLanIP();
   if (!subCommand || subCommand === 'list') {
-    const links = loadLinksConfig(pidDir, detectLanIP(), DEFAULT_PORT);
+    const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
     if (links.length === 0) {
       console.log('No links configured.');
       return;
@@ -374,7 +376,7 @@ function handleLinkCommand(pidDir: string, args: string[]): void {
     const labelIdx = args.indexOf('--label');
     const label = labelIdx !== -1 && args[labelIdx + 1] ? args[labelIdx + 1]! : type;
     const id = `${type}-${Date.now()}`;
-    const links = loadLinksConfig(pidDir, detectLanIP(), DEFAULT_PORT);
+    const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
     links.push({ id, type: type as LinkType, label, url, enabled: true });
     saveLinksConfig(pidDir, links);
     console.log(`Added link: [${type}] ${label} (${url})`);
@@ -387,7 +389,7 @@ function handleLinkCommand(pidDir: string, args: string[]): void {
       console.error('Usage: mypilot link remove <id>');
       process.exit(1);
     }
-    const links = loadLinksConfig(pidDir, detectLanIP(), DEFAULT_PORT);
+    const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
     const idx = links.findIndex(l => l.id === id);
     if (idx === -1) {
       console.error(`Link not found: ${id}`);
@@ -405,7 +407,7 @@ function handleLinkCommand(pidDir: string, args: string[]): void {
       console.error(`Usage: mypilot link ${subCommand} <id>`);
       process.exit(1);
     }
-    const links = loadLinksConfig(pidDir, detectLanIP(), DEFAULT_PORT);
+    const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
     const link = links.find(l => l.id === id);
     if (!link) {
       console.error(`Link not found: ${id}`);
@@ -418,7 +420,7 @@ function handleLinkCommand(pidDir: string, args: string[]): void {
     }
     link.enabled = newState;
     saveLinksConfig(pidDir, links);
-    console.log(`${subCommand === 'enable' ? 'Enabled' : 'Disabled'}: ${link.label}`);
+    console.log(`${newState ? 'Enabled' : 'Disabled'}: ${link.label}`);
     return;
   }
 

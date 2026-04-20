@@ -1,0 +1,7 @@
+name = "mypilot-relay"
+main = "src/index.ts"
+compatibility_date = "2024-04-20"
+
+[[durable_objects]]
+class_name = "Hub"
+binding = "MYPILOT_relay"
