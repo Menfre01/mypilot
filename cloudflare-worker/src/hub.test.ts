@@ -76,13 +76,10 @@ function makeRequest(url: string, opts: RequestInit = {}): Request {
 class TestHub {
   private gateways = new Map<string, WebSocket>();
   private apps = new Map<string, WebSocket>();
-  private gatewayKeys = new Map<string, string>();
+  private gatewayKeyHashes = new Map<string, string>();
   private _seq = 0;
-  private env: { GATEWAY_KEY: string };
 
-  constructor(env: { GATEWAY_KEY: string } = { GATEWAY_KEY: 'test-key' }) {
-    this.env = env;
-  }
+  constructor() {}
 
   get seq(): number {
     return this._seq;
@@ -113,29 +110,28 @@ class TestHub {
   }
 
   private handleWebSocket(url: URL): Response {
-    const key = url.searchParams.get('key') ?? '';
+    const keyHash = url.searchParams.get('keyHash') ?? '';
     const lastEventSeqParam = url.searchParams.get('lastEventSeq');
     const lastEventSeq = lastEventSeqParam != null ? Number(lastEventSeqParam) : undefined;
 
     const isApp = url.pathname === '/ws-gateway' || url.searchParams.get('app') === '1';
-    const gatewayId = isApp
-      ? (url.searchParams.get('gatewayId') || key.slice(0, 16))
-      : (url.searchParams.get('gatewayId') ?? '');
+    const gatewayId = url.searchParams.get('gatewayId') ?? '';
 
-    if (!gatewayId || !key) {
-      return new Response('Missing gatewayId or key', { status: 400 });
+    if (!gatewayId || !keyHash) {
+      return new Response('Missing gatewayId or keyHash', { status: 400 });
     }
 
     if (isApp) {
       if (!this.gateways.has(gatewayId)) {
         return new Response('Gateway not connected', { status: 503 });
       }
-      const storedKey = this.gatewayKeys.get(gatewayId);
-      if (!storedKey || storedKey !== key) {
+      const storedHash = this.gatewayKeyHashes.get(gatewayId);
+      if (!storedHash || storedHash !== keyHash) {
         return new Response('Unauthorized', { status: 401 });
       }
     } else {
-      if (!this.env.GATEWAY_KEY || key !== this.env.GATEWAY_KEY) {
+      const storedHash = this.gatewayKeyHashes.get(gatewayId);
+      if (storedHash && storedHash !== keyHash) {
         return new Response('Unauthorized', { status: 401 });
       }
     }
@@ -154,7 +150,7 @@ class TestHub {
       const existing = this.gateways.get(gatewayId);
       if (existing && existing.readyState === WebSocket.OPEN) existing.close();
       this.gateways.set(gatewayId, clientWs);
-      this.gatewayKeys.set(gatewayId, key);
+      this.gatewayKeyHashes.set(gatewayId, keyHash);
       this.setupGatewayHandlers(clientWs, gatewayId);
     }
 
@@ -181,7 +177,7 @@ class TestHub {
     });
     ws.addEventListener('close', () => {
       this.gateways.delete(gatewayId);
-      this.gatewayKeys.delete(gatewayId);
+      this.gatewayKeyHashes.delete(gatewayId);
     });
   }
 
@@ -213,7 +209,7 @@ describe('Hub Durable Object', () => {
   describe('gateway registration', () => {
     it('registers a gateway on WebSocket connect', async () => {
       const hub = new TestHub();
-      const req = makeRequest('/relay?gatewayId=gw1&key=test-key', {
+      const req = makeRequest('/relay?gatewayId=gw1&keyHash=test-hash', {
         headers: { upgrade: 'websocket' },
       });
 
@@ -225,10 +221,10 @@ describe('Hub Durable Object', () => {
       expect(body.ok).toBe(true);
     });
 
-    it('rejects gateway without gatewayId or key', async () => {
+    it('rejects gateway without gatewayId or keyHash', async () => {
       const hub = new TestHub();
 
-      const res1 = await hub.fetch(makeRequest('/relay?key=test-key', {
+      const res1 = await hub.fetch(makeRequest('/relay?keyHash=test-hash', {
         headers: { upgrade: 'websocket' },
       }));
       expect(res1.status).toBe(400);
@@ -239,9 +235,14 @@ describe('Hub Durable Object', () => {
       expect(res2.status).toBe(400);
     });
 
-    it('rejects gateway with wrong key (401)', async () => {
+    it('rejects gateway with wrong keyHash when already registered (401)', async () => {
       const hub = new TestHub();
-      const res = await hub.fetch(makeRequest('/relay?gatewayId=gw1&key=wrong-key', {
+      // First gateway registers with test-hash
+      await hub.fetch(makeRequest('/relay?gatewayId=gw1&keyHash=test-hash', {
+        headers: { upgrade: 'websocket' },
+      }));
+      // Second gateway with different hash for same gatewayId is rejected
+      const res = await hub.fetch(makeRequest('/relay?gatewayId=gw1&keyHash=wrong-hash', {
         headers: { upgrade: 'websocket' },
       }));
       expect(res.status).toBe(401);
@@ -252,7 +253,7 @@ describe('Hub Durable Object', () => {
     it('rejects app when gateway is not connected (503)', async () => {
       const hub = new TestHub();
 
-      const req = makeRequest('/relay?gatewayId=gw1&key=secret&app=1', {
+      const req = makeRequest('/relay?gatewayId=gw1&keyHash=secret&app=1', {
         headers: { upgrade: 'websocket' },
       });
 
@@ -264,12 +265,12 @@ describe('Hub Durable Object', () => {
       const hub = new TestHub();
 
       // Connect gateway first
-      await hub.fetch(makeRequest('/relay?gatewayId=gw1&key=test-key', {
+      await hub.fetch(makeRequest('/relay?gatewayId=gw1&keyHash=test-hash', {
         headers: { upgrade: 'websocket' },
       }));
 
       // Now app can connect
-      const appReq = makeRequest('/relay?gatewayId=gw1&key=test-key&app=1', {
+      const appReq = makeRequest('/relay?gatewayId=gw1&keyHash=test-hash&app=1', {
         headers: { upgrade: 'websocket' },
       });
       const appRes = await hub.fetch(appReq);
@@ -279,11 +280,11 @@ describe('Hub Durable Object', () => {
     it('rejects app with wrong key (401)', async () => {
       const hub = new TestHub();
 
-      await hub.fetch(makeRequest('/relay?gatewayId=gw1&key=test-key', {
+      await hub.fetch(makeRequest('/relay?gatewayId=gw1&keyHash=test-hash', {
         headers: { upgrade: 'websocket' },
       }));
 
-      const appReq = makeRequest('/relay?gatewayId=gw1&key=wrong-key&app=1', {
+      const appReq = makeRequest('/relay?gatewayId=gw1&keyHash=wrong-hash&app=1', {
         headers: { upgrade: 'websocket' },
       });
       const appRes = await hub.fetch(appReq);
@@ -301,7 +302,7 @@ describe('Hub Durable Object', () => {
 
     it('returns hasGateway=true when gateway is connected', async () => {
       const hub = new TestHub();
-      await hub.fetch(makeRequest('/relay?gatewayId=gw1&key=test-key', {
+      await hub.fetch(makeRequest('/relay?gatewayId=gw1&keyHash=test-hash', {
         headers: { upgrade: 'websocket' },
       }));
       const res = await hub.fetch(makeRequest('/connect?gatewayId=gw1'));
@@ -321,12 +322,12 @@ describe('Hub Durable Object', () => {
     it('replaces existing gateway connection for same gatewayId', async () => {
       const hub = new TestHub();
 
-      const res1 = await hub.fetch(makeRequest('/relay?gatewayId=gw1&key=test-key', {
+      const res1 = await hub.fetch(makeRequest('/relay?gatewayId=gw1&keyHash=test-hash', {
         headers: { upgrade: 'websocket' },
       }));
       expect(res1.status).toBe(200);
 
-      const res2 = await hub.fetch(makeRequest('/relay?gatewayId=gw1&key=test-key', {
+      const res2 = await hub.fetch(makeRequest('/relay?gatewayId=gw1&keyHash=test-hash', {
         headers: { upgrade: 'websocket' },
       }));
       expect(res2.status).toBe(200);

@@ -56,7 +56,7 @@ describe('createRelayClient', () => {
 
       expect(factory).toHaveBeenCalledOnce();
       expect(factory).toHaveBeenCalledWith(
-        expect.stringContaining('wss://relay.example.com/relay?gatewayId=gw-abc&key='),
+        expect.stringContaining('wss://relay.example.com/relay?gatewayId=gw-abc&keyHash='),
       );
     });
 

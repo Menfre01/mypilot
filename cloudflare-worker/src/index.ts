@@ -49,13 +49,10 @@ interface WsEnvelope {
 export class Hub implements DurableObject {
   private gateways = new Map<string, WebSocket>();
   private apps = new Map<string, WebSocket>();
-  private gatewayKeys = new Map<string, string>();
+  private gatewayKeyHashes = new Map<string, string>();
   private seq = 0;
-  private env: Environment;
 
-  constructor(_ctx: DurableObjectState, env: Environment) {
-    this.env = env;
-  }
+  constructor(_ctx: DurableObjectState, _env: Environment) {}
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -88,29 +85,28 @@ export class Hub implements DurableObject {
   }
 
   private handleWebSocket(url: URL): Response {
-    const key = url.searchParams.get('key') ?? '';
+    const keyHash = url.searchParams.get('keyHash') ?? '';
     const lastEventSeqParam = url.searchParams.get('lastEventSeq');
     const lastEventSeq = lastEventSeqParam != null ? Number(lastEventSeqParam) : undefined;
 
     const isApp = url.pathname === '/ws-gateway' || url.searchParams.get('app') === '1';
-    const gatewayId = isApp
-      ? (url.searchParams.get('gatewayId') || key.slice(0, 16))
-      : (url.searchParams.get('gatewayId') ?? '');
+    const gatewayId = url.searchParams.get('gatewayId') ?? '';
 
-    if (!gatewayId || !key) {
-      return new Response('Missing gatewayId or key', { status: 400 });
+    if (!gatewayId || !keyHash) {
+      return new Response('Missing gatewayId or keyHash', { status: 400 });
     }
 
     if (isApp) {
       if (!this.gateways.has(gatewayId)) {
         return new Response('Gateway not connected', { status: 503 });
       }
-      const storedKey = this.gatewayKeys.get(gatewayId);
-      if (!storedKey || storedKey !== key) {
+      const storedHash = this.gatewayKeyHashes.get(gatewayId);
+      if (!storedHash || storedHash !== keyHash) {
         return new Response('Unauthorized', { status: 401 });
       }
     } else {
-      if (!this.env.GATEWAY_KEY || key !== this.env.GATEWAY_KEY) {
+      const storedHash = this.gatewayKeyHashes.get(gatewayId);
+      if (storedHash && storedHash !== keyHash) {
         return new Response('Unauthorized', { status: 401 });
       }
     }
@@ -133,7 +129,7 @@ export class Hub implements DurableObject {
         existing.close();
       }
       this.gateways.set(gatewayId, clientWs);
-      this.gatewayKeys.set(gatewayId, key);
+      this.gatewayKeyHashes.set(gatewayId, keyHash);
       this.setupGatewayHandlers(clientWs, gatewayId);
     }
 
@@ -161,7 +157,7 @@ export class Hub implements DurableObject {
 
     ws.addEventListener('close', () => {
       this.gateways.delete(gatewayId);
-      this.gatewayKeys.delete(gatewayId);
+      this.gatewayKeyHashes.delete(gatewayId);
     });
   }
 
@@ -211,5 +207,4 @@ export default {
 
 interface Environment {
   MYPILOT_RELAY: DurableObjectNamespace;
-  GATEWAY_KEY: string;
 }

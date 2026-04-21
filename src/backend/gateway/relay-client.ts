@@ -1,5 +1,6 @@
 import type { ClientMessage, GatewayMessage, EncryptedEnvelope } from '../../shared/protocol.js';
 import { encrypt, decrypt } from './crypto.js';
+import { deriveKeyIdentifiers } from './key-hash.js';
 import WS from 'ws';
 
 export interface RelayClient {
@@ -25,7 +26,6 @@ export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
   let ws: WsLike | null = null;
   let gatewayId = '';
   let key: Buffer = Buffer.alloc(0);
-  let keyB64 = '';
   let relayUrl = '';
   let messageHandler: ((msg: ClientMessage, deviceId: string) => void) | null = null;
   let retryCount = 0;
@@ -56,7 +56,8 @@ export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
   async function connectImpl(): Promise<void> {
     return new Promise((resolve, reject) => {
       const parsed = new URL(relayUrl);
-      const url = new URL(`/relay?gatewayId=${encodeURIComponent(gatewayId)}&key=${keyB64}`, relayUrl);
+      const { keyHash } = deriveKeyIdentifiers(key);
+      const url = new URL(`/relay?gatewayId=${encodeURIComponent(gatewayId)}&keyHash=${encodeURIComponent(keyHash)}`, relayUrl);
       url.protocol = parsed.protocol === 'wss:' ? 'wss:' : 'ws:';
 
       const sock = createSocket(url.toString());
@@ -136,7 +137,6 @@ export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
       relayUrl = url;
       gatewayId = gwId;
       key = k;
-      keyB64 = k.toString('base64');
       intentionallyDisconnected = false;
       retryCount = 0;
       return connectImpl();

@@ -6,6 +6,7 @@ import { HookHandler, HttpError } from './hook-handler.js';
 import { EventLogger } from './event-logger.js';
 import { createRelayClient } from './relay-client.js';
 import type { ClientMessage, GatewayMessage, LinkConfig } from '../../shared/protocol.js';
+import { deriveKeyIdentifiers } from './key-hash.js';
 
 export interface GatewayServer {
   start(): Promise<void>;
@@ -24,8 +25,8 @@ export function createServer(
   const eventLogger = new EventLogger(logDir);
 
   const relayClient = cloudflareLink ? createRelayClient() : null;
+  const { gatewayId, keyHash } = deriveKeyIdentifiers(key);
   const keyB64 = key.toString('base64');
-  const gatewayId = keyB64.slice(0, 16);
   const MAX_RECENT_EVENTS = 200;
 
   function getRecentEvents(lastEventSeq?: number) {
