@@ -16,7 +16,7 @@ describe('qr-display', () => {
     logSpy.mockRestore();
   });
 
-  it('includes enabled links in output', () => {
+  it('includes links in QR payload when provided', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const key = Buffer.alloc(32, 0xAB);
     const links: LinkConfig[] = [
@@ -27,42 +27,38 @@ describe('qr-display', () => {
     displayConnectionInfo('192.168.1.100', 16321, key, links);
 
     const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(output).toContain('Links:');
-    expect(output).toContain('[lan] LAN Direct: ws://192.168.1.100:16321');
-    expect(output).toContain('[tunnel] ngrok: wss://abc.ngrok-free.app');
+    expect(output).toContain('LAN Direct');
+    expect(output).toContain('ngrok');
+    expect(output).toContain('wss://abc.ngrok-free.app');
 
     logSpy.mockRestore();
   });
 
-  it('excludes disabled links from output', () => {
+  it('omits links section when no links provided', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const key = Buffer.alloc(32, 0xAB);
+
+    displayConnectionInfo('192.168.1.100', 16321, key);
+
+    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(output).not.toContain('Links:');
+
+    logSpy.mockRestore();
+  });
+
+  it('only shows enabled links', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const key = Buffer.alloc(32, 0xAB);
     const links: LinkConfig[] = [
       { id: 'lan-default', type: 'lan', label: 'LAN Direct', url: 'ws://192.168.1.100:16321', enabled: true },
-      { id: 'tunnel-1', type: 'tunnel', label: 'ngrok', url: 'wss://abc.ngrok-free.app', enabled: false },
+      { id: 'tunnel-1', type: 'tunnel', label: 'Disabled', url: 'wss://disabled.com', enabled: false },
     ];
 
     displayConnectionInfo('192.168.1.100', 16321, key, links);
 
     const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(output).toContain('[lan] LAN Direct: ws://192.168.1.100:16321');
-    expect(output).not.toContain('[tunnel] ngrok: wss://abc.ngrok-free.app');
-
-    logSpy.mockRestore();
-  });
-
-  it('generates QR payload with links when provided', () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const key = Buffer.alloc(32, 0xAB);
-    const links: LinkConfig[] = [
-      { id: 'lan-default', type: 'lan', label: 'LAN Direct', url: 'ws://192.168.1.100:16321', enabled: true },
-    ];
-
-    displayConnectionInfo('192.168.1.100', 16321, key, links);
-
-    // Verify links are shown in the output
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(output).toContain('[lan] LAN Direct: ws://192.168.1.100:16321');
+    expect(output).toContain('LAN Direct');
+    expect(output).not.toContain('Disabled');
 
     logSpy.mockRestore();
   });

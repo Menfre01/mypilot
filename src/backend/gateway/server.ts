@@ -4,9 +4,7 @@ import { PendingStore } from './pending-store.js';
 import { WsBus } from './ws-bus.js';
 import { HookHandler, HttpError } from './hook-handler.js';
 import { EventLogger } from './event-logger.js';
-import { createRelayClient } from './relay-client.js';
-import type { ClientMessage, GatewayMessage, LinkConfig } from '../../shared/protocol.js';
-import { deriveKeyIdentifiers } from './key-hash.js';
+import type { ClientMessage, GatewayMessage } from '../../shared/protocol.js';
 
 export interface GatewayServer {
   start(): Promise<void>;
@@ -17,15 +15,12 @@ export function createServer(
   port: number,
   logDir: string,
   key: Buffer,
-  cloudflareLink?: LinkConfig,
 ): GatewayServer {
   const sessionStore = new SessionStore();
   const pendingStore = new PendingStore();
   const wsBus = new WsBus(key);
   const eventLogger = new EventLogger(logDir);
 
-  const relayClient = cloudflareLink ? createRelayClient() : null;
-  const { gatewayId, keyHash } = deriveKeyIdentifiers(key);
   const keyB64 = key.toString('base64');
   const MAX_RECENT_EVENTS = 200;
 
@@ -35,16 +30,11 @@ export function createServer(
       : hookHandler.getEventHistory();
   }
 
-  const relayBroadcast = relayClient
-    ? (msg: GatewayMessage) => relayClient.broadcast(msg)
-    : undefined;
-
   const hookHandler = new HookHandler(
     sessionStore,
     pendingStore,
     wsBus,
     eventLogger,
-    relayBroadcast,
   );
 
   let httpServer: Server;
@@ -107,13 +97,9 @@ export function createServer(
   }
 
   function broadcastSessionState(lastEventSeq?: number, targetDeviceId?: string, cachedEvents?: ReturnType<typeof getRecentEvents>): void {
-    // With checkpoint: only events after it (may be empty if up-to-date).
-    // Without checkpoint (fresh install): full in-memory history.
     const recentEvents = cachedEvents ?? getRecentEvents(lastEventSeq);
     const pendingInteractions = hookHandler.getPendingInteractions();
 
-    // Deduplicate: exclude events already in pendingInteractions to avoid
-    // processing the same interaction event twice (once via recentEvents, once via pendingInteractions).
     const pendingIds = new Set(pendingInteractions.map(p => p.eventId));
     const dedupedEvents = pendingIds.size > 0
       ? recentEvents.filter(e => !pendingIds.has(String(e.event.event_id ?? '')))
@@ -128,9 +114,6 @@ export function createServer(
       takeoverOwner: hookHandler.getTakeoverOwner() ?? undefined,
     };
     wsBus.sendSessionList(msg.sessions, msg.mode, msg.recentEvents, msg.pendingInteractions, targetDeviceId, msg.takeoverOwner);
-    if (relayClient) {
-      relayClient.broadcast(msg, targetDeviceId);
-    }
   }
 
   function handleClientMessage(message: ClientMessage, deviceId: string): void {
@@ -164,7 +147,6 @@ export function createServer(
       wsBus.attach(httpServer);
       wsBus.onMessage(handleClientMessage);
       wsBus.onConnect((url, deviceId) => {
-        // Read lastEventSeq from WS URL to send correct events in one shot.
         const seqParam = url.searchParams.get('lastEventSeq');
         const lastEventSeq = seqParam != null ? Number(seqParam) : undefined;
         broadcastSessionState(
@@ -173,14 +155,6 @@ export function createServer(
         );
       });
 
-      if (relayClient) {
-        relayClient.onMessage(handleClientMessage);
-        relayClient.onAppConnect((deviceId: string, lastEventSeq?: number) => {
-          broadcastSessionState(lastEventSeq, deviceId);
-        });
-        await relayClient.connect(cloudflareLink!.url, gatewayId, key);
-      }
-
       return new Promise((resolve) => {
         httpServer.listen(port, resolve);
       });
@@ -188,7 +162,6 @@ export function createServer(
 
     async stop(): Promise<void> {
       pendingStore.releaseAll();
-      relayClient?.disconnect();
       wsBus.close();
       return new Promise((resolve) => {
         if (httpServer) {

@@ -46,11 +46,9 @@ function getProcessStartTime(pid: number): string | null {
   try {
     if (IS_LINUX) {
       const stat = readFileSync(`/proc/${pid}/stat`, "utf-8").trim();
-      // comm (field 2) can contain spaces; find closing ')' to get reliable field index
       const closeParen = stat.lastIndexOf(')');
       if (closeParen === -1) return null;
       const afterComm = stat.slice(closeParen + 2).split(" ");
-      // starttime is field 22 (1-indexed), but after removing pid and comm it's at index 19
       return afterComm[19] ?? null;
     }
     const result = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf-8" }).trim();
@@ -81,11 +79,10 @@ function printUsage(): void {
   console.log("  gateway     Start Gateway in foreground");
   console.log("  status      Check Gateway status");
   console.log("  pair-info   Show pairing info (IP + QR code)");
-  console.log("              Optional: pair-info <domain[:port]> for NAT traversal");
   console.log("  init-hooks  Configure Claude Code hooks");
   console.log("  link        Manage communication links");
   console.log("              link list");
-  console.log("              link add <type> <url> [--label <label>]");
+  console.log("              link add <lan|tunnel> <url> [--label <label>]");
   console.log("              link remove <id>");
   console.log("              link enable <id>");
   console.log("              link disable <id>");
@@ -98,27 +95,21 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
     process.exit(1);
   }
 
-  // Get or create persistent encryption key
   mkdirSync(pidDir, { recursive: true });
   const key = getOrCreateKey(pidDir);
   const logDir = join(pidDir, "logs");
 
-  // Detect LAN IP before starting server (needed for link config)
   const lanIP = detectLanIP();
   const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
-  const cloudflareLink = links.find((l) => l.type === 'cloudflare' && l.enabled);
-  const server = createServer(DEFAULT_PORT, logDir, key, cloudflareLink);
+  const server = createServer(DEFAULT_PORT, logDir, key);
 
-  // Write PID file early so startBackground detects it before relay connect
   writePidFile(pidPath, process.pid);
 
   await server.start();
 
-  // Display connection info with QR code
   console.log(`Gateway running at http://localhost:${DEFAULT_PORT}`);
   displayConnectionInfo(lanIP, DEFAULT_PORT, key, links);
 
-  // Handle SIGINT for graceful shutdown
   process.on("SIGINT", async () => {
     console.log("Shutting down gateway...");
     await server.stop();
@@ -165,7 +156,6 @@ async function startBackground(pidDir: string, pidPath: string): Promise<void> {
 
   child.unref();
 
-  // Wait for child to write PID file (up to 3 seconds)
   const childPid = child.pid;
   let attempts = 0;
   const maxAttempts = 30;
@@ -184,7 +174,6 @@ async function startBackground(pidDir: string, pidPath: string): Promise<void> {
       displayConnectionInfo(lanIP, DEFAULT_PORT, key, links);
       return;
     }
-    // Check if child itself crashed before writing PID
     if (childPid === undefined || !isProcessAlive(childPid)) {
       console.error("Gateway failed to start. Check log file:");
       console.error(`  ${logFile}`);
@@ -207,7 +196,6 @@ async function stopGateway(pidPath: string): Promise<void> {
   }
 
   if (!isProcessAlive(info.pid, info.startTime)) {
-    // Stale PID file, clean it up
     try {
       unlinkSync(pidPath);
     } catch {
@@ -217,11 +205,9 @@ async function stopGateway(pidPath: string): Promise<void> {
     return;
   }
 
-  // Send SIGTERM for graceful shutdown
   try {
     process.kill(info.pid, "SIGTERM");
   } catch {
-    // Process may have died between check and kill
     try {
       unlinkSync(pidPath);
     } catch {
@@ -231,7 +217,6 @@ async function stopGateway(pidPath: string): Promise<void> {
     return;
   }
 
-  // Wait for process to exit (up to 5 seconds)
   let attempts = 0;
   const maxAttempts = 50;
   const intervalMs = 100;
@@ -250,7 +235,6 @@ async function stopGateway(pidPath: string): Promise<void> {
     attempts++;
   }
 
-  // Force kill
   try {
     process.kill(info.pid, "SIGKILL");
   } catch {
@@ -281,29 +265,7 @@ async function checkStatus(pidPath: string): Promise<void> {
   console.log(`Gateway is running (PID ${info.pid}, port ${DEFAULT_PORT})`);
 }
 
-function parseDomainArg(domain: string): { host: string; port: number } {
-  const colonIdx = domain.lastIndexOf(":");
-  if (domain.startsWith("[")) {
-    const bracketEnd = domain.indexOf("]");
-    if (bracketEnd === -1) return { host: domain, port: 443 };
-    const host = domain.slice(0, bracketEnd + 1);
-    const rest = domain.slice(bracketEnd + 1);
-    if (rest.startsWith(":")) {
-      const port = parseInt(rest.slice(1), 10);
-      return { host, port: Number.isNaN(port) ? 443 : port };
-    }
-    return { host, port: 443 };
-  }
-  if (colonIdx !== -1) {
-    const port = parseInt(domain.slice(colonIdx + 1), 10);
-    if (!Number.isNaN(port)) {
-      return { host: domain.slice(0, colonIdx), port };
-    }
-  }
-  return { host: domain, port: 443 };
-}
-
-async function showPairInfo(pidDir: string, domainArg?: string): Promise<void> {
+async function showPairInfo(pidDir: string): Promise<void> {
   let key: Buffer;
   try {
     key = readFileSync(join(pidDir, "key"));
@@ -314,12 +276,9 @@ async function showPairInfo(pidDir: string, domainArg?: string): Promise<void> {
   }
 
   const lanIP = detectLanIP();
-  const { host, port } = domainArg
-    ? parseDomainArg(domainArg)
-    : { host: lanIP, port: DEFAULT_PORT };
-  console.log(`MyPilot Gateway pairing info:`);
   const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
-  displayConnectionInfo(host, port, key, links);
+  console.log(`MyPilot Gateway pairing info:`);
+  displayConnectionInfo(lanIP, DEFAULT_PORT, key, links);
 }
 
 async function initHooks(settingsPath: string): Promise<void> {
@@ -393,7 +352,7 @@ function handleLinkCommand(pidDir: string, args: string[]): void {
     for (const link of links) {
       const status = link.enabled ? 'enabled' : 'disabled';
       const active = link.id === 'lan-default' ? ' (default)' : '';
-      console.log(`  ${link.id}\t[${link.type}] ${link.label}: ${link.url} (${status}${active})`);
+      console.log(`  ${link.id}  [${link.type}] ${link.label}: ${link.url} (${status}${active})`);
     }
     console.log('');
     return;
@@ -416,7 +375,7 @@ function handleLinkCommand(pidDir: string, args: string[]): void {
     const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
     links.push({ id, type: type as LinkType, label, url, enabled: true });
     saveLinksConfig(pidDir, links);
-    console.log(`Added link: [${type}] ${label} (${url})`);
+    console.log(`Added link: [${type}] ${label} (${url}) id=${id}`);
     return;
   }
 
@@ -496,7 +455,7 @@ export async function runCli(
       await checkStatus(pidPath);
       break;
     case "pair-info":
-      await showPairInfo(pidDir, argv[3] as string | undefined);
+      await showPairInfo(pidDir);
       break;
     case "init-hooks":
       await initHooks(settingsPath);
@@ -510,8 +469,6 @@ export async function runCli(
   }
 }
 
-// Entry point when run as a script (not during test import)
-// Resolve symlinks so npm-linked binaries are detected correctly
 const isMainModule = (() => {
   if (!process.argv[1]) return false;
   try {

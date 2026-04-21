@@ -1,9 +1,6 @@
 import qrcode from 'qrcode-terminal';
 import type { PairingInfo, LinkConfig } from '../../shared/protocol.js';
 
-/**
- * Display QR code and connection info in the terminal.
- */
 export function displayConnectionInfo(host: string, port: number, key: Buffer, links: LinkConfig[] = []): void {
   const keyB64 = key.toString('base64');
   const enabledLinks = links.filter(l => l.enabled);

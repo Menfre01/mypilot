@@ -25,16 +25,12 @@ vi.mock("./gateway/qr-display.js", () => ({
   displayConnectionInfo: vi.fn(),
 }));
 
+const MOCK_LINKS = [
+  { id: 'lan-default', type: 'lan', label: 'LAN Direct', url: 'ws://192.168.1.100:16321', enabled: true },
+];
+
 vi.mock("./gateway/link-config.js", () => ({
-  loadLinksConfig: vi.fn(() => [
-    {
-      id: 'lan-default',
-      type: 'lan',
-      label: 'LAN Direct',
-      url: 'ws://192.168.1.100:16321',
-      enabled: true,
-    },
-  ]),
+  loadLinksConfig: vi.fn(() => MOCK_LINKS),
   saveLinksConfig: vi.fn(),
 }));
 
@@ -162,7 +158,6 @@ describe("runCli", () => {
         DEFAULT_PORT,
         join(testPidDir, "logs"),
         MOCK_KEY,
-        undefined,
       );
     });
 
@@ -177,12 +172,10 @@ describe("runCli", () => {
 
     it("displays connection info on startup", async () => {
       const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      const { loadLinksConfig } = await import("./gateway/link-config.js");
 
       await runCli(makeArgv("gateway"), testPidDir, testPidPath);
 
-      const expectedLinks = loadLinksConfig(testPidDir, "192.168.1.100", DEFAULT_PORT);
-      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY, expectedLinks);
+      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY, MOCK_LINKS);
     });
 
     it("writes PID file on start", async () => {
@@ -343,9 +336,7 @@ describe("runCli", () => {
       await runCli(makeArgv("pair-info"), testPidDir, testPidPath);
 
       const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      const { loadLinksConfig } = await import("./gateway/link-config.js");
-      const expectedLinks = loadLinksConfig(testPidDir, "192.168.1.100", DEFAULT_PORT);
-      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY, expectedLinks);
+      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY, MOCK_LINKS);
     });
 
     it("shows pairing header in output", async () => {
@@ -356,42 +347,6 @@ describe("runCli", () => {
 
       const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
       expect(output).toMatch(/pairing info/i);
-    });
-
-    it("uses domain with port 443 when domain provided without port", async () => {
-      mkdirSync(testPidDir, { recursive: true });
-      writeFileSync(join(testPidDir, "key"), MOCK_KEY);
-
-      await runCli(makeArgv("pair-info", "tunnel.example.com"), testPidDir, testPidPath);
-
-      const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      const { loadLinksConfig } = await import("./gateway/link-config.js");
-      const expectedLinks = loadLinksConfig(testPidDir, "192.168.1.100", DEFAULT_PORT);
-      expect(displayConnectionInfo).toHaveBeenCalledWith("tunnel.example.com", 443, MOCK_KEY, expectedLinks);
-    });
-
-    it("parses host:port when domain includes port", async () => {
-      mkdirSync(testPidDir, { recursive: true });
-      writeFileSync(join(testPidDir, "key"), MOCK_KEY);
-
-      await runCli(makeArgv("pair-info", "tunnel.example.com:8080"), testPidDir, testPidPath);
-
-      const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      const { loadLinksConfig } = await import("./gateway/link-config.js");
-      const expectedLinks = loadLinksConfig(testPidDir, "192.168.1.100", DEFAULT_PORT);
-      expect(displayConnectionInfo).toHaveBeenCalledWith("tunnel.example.com", 8080, MOCK_KEY, expectedLinks);
-    });
-
-    it("uses LAN IP when domain is not provided", async () => {
-      mkdirSync(testPidDir, { recursive: true });
-      writeFileSync(join(testPidDir, "key"), MOCK_KEY);
-
-      await runCli(makeArgv("pair-info"), testPidDir, testPidPath);
-
-      const { displayConnectionInfo } = await import("./gateway/qr-display.js");
-      const { loadLinksConfig } = await import("./gateway/link-config.js");
-      const expectedLinks = loadLinksConfig(testPidDir, "192.168.1.100", DEFAULT_PORT);
-      expect(displayConnectionInfo).toHaveBeenCalledWith("192.168.1.100", DEFAULT_PORT, MOCK_KEY, expectedLinks);
     });
   });
 
@@ -580,6 +535,100 @@ describe("runCli", () => {
       expect(existsSync(testPidPath)).toBe(false);
 
       killSpy.mockRestore();
+    });
+  });
+
+  // ── link command ──
+
+  describe("link", () => {
+    it("lists configured links", async () => {
+      await runCli(makeArgv("link", "list"), testPidDir, testPidPath);
+
+      const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(output).toContain("lan-default");
+      expect(output).toContain("LAN Direct");
+    });
+
+    it("lists links when no sub-command given", async () => {
+      await runCli(makeArgv("link"), testPidDir, testPidPath);
+
+      const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(output).toContain("LAN Direct");
+    });
+
+    it("adds a tunnel link", async () => {
+      const { loadLinksConfig, saveLinksConfig } = await import("./gateway/link-config.js");
+      const links = [...MOCK_LINKS];
+      (loadLinksConfig as any).mockReturnValue(links);
+
+      await runCli(makeArgv("link", "add", "tunnel", "wss://abc.ngrok-free.app", "--label", "ngrok"), testPidDir, testPidPath);
+
+      expect(saveLinksConfig).toHaveBeenCalled();
+      const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(output).toContain("Added link");
+      expect(output).toContain("id=");
+    });
+
+    it("rejects invalid link type", async () => {
+      try {
+        await runCli(makeArgv("link", "add", "cloudflare", "wss://x.com"), testPidDir, testPidPath);
+        expect.fail("should have thrown");
+      } catch (e) {
+        expect(e).toBeInstanceOf(ExitError);
+      }
+
+      const output = consoleErrorSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(output).toContain("Invalid type");
+    });
+
+    it("removes a link", async () => {
+      const { loadLinksConfig, saveLinksConfig } = await import("./gateway/link-config.js");
+      const links = [...MOCK_LINKS];
+      (loadLinksConfig as any).mockReturnValue(links);
+
+      await runCli(makeArgv("link", "remove", "lan-default"), testPidDir, testPidPath);
+
+      expect(saveLinksConfig).toHaveBeenCalled();
+      const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(output).toContain("Removed link");
+    });
+
+    it("errors when removing non-existent link", async () => {
+      try {
+        await runCli(makeArgv("link", "remove", "nope"), testPidDir, testPidPath);
+        expect.fail("should have thrown");
+      } catch (e) {
+        expect(e).toBeInstanceOf(ExitError);
+      }
+    });
+
+    it("enables a link", async () => {
+      const { loadLinksConfig, saveLinksConfig } = await import("./gateway/link-config.js");
+      const links = [{ ...MOCK_LINKS[0], enabled: false }];
+      (loadLinksConfig as any).mockReturnValue(links);
+
+      await runCli(makeArgv("link", "enable", "lan-default"), testPidDir, testPidPath);
+
+      expect(saveLinksConfig).toHaveBeenCalled();
+    });
+
+    it("disables a link", async () => {
+      const { loadLinksConfig, saveLinksConfig } = await import("./gateway/link-config.js");
+      const links = [...MOCK_LINKS];
+      (loadLinksConfig as any).mockReturnValue(links);
+
+      await runCli(makeArgv("link", "disable", "lan-default"), testPidDir, testPidPath);
+
+      expect(saveLinksConfig).toHaveBeenCalled();
+    });
+
+    it("rejects unknown sub-command", async () => {
+      try {
+        await runCli(makeArgv("link", "explode"), testPidDir, testPidPath);
+        expect.fail("should have thrown");
+      } catch (e) {
+        expect(e).toBeInstanceOf(ExitError);
+      }
     });
   });
 });

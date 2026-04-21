@@ -39,11 +39,9 @@ export class HookHandler {
   private historyHead = 0;
   private maxHistory = 200;
   private historyCache: { sessionId: string; event: SSEHookEvent }[] | null = null;
-  private relayBroadcaster?: (msg: GatewayMessage) => void;
 
   private broadcastAll(msg: GatewayMessage): void {
     this.wsBus.broadcast(msg);
-    this.relayBroadcaster?.(msg);
   }
 
   constructor(
@@ -51,15 +49,12 @@ export class HookHandler {
     pendingStore: PendingStore,
     wsBus: WsBus,
     eventLogger?: EventLogger,
-    relayBroadcaster?: (msg: GatewayMessage) => void,
   ) {
     this.sessionStore = sessionStore;
     this.pendingStore = pendingStore;
     this.wsBus = wsBus;
     this.eventLogger = eventLogger ?? null;
-    this.relayBroadcaster = relayBroadcaster;
 
-    // Restore event history, seq, and active sessions from JSONL logs on startup
     if (this.eventLogger) {
       const recent = this.eventLogger.loadRecentEvents(this.maxHistory);
       for (const entry of recent) {
@@ -67,7 +62,6 @@ export class HookHandler {
         const seq = entry.seq;
         if (seq > this._seq) this._seq = seq;
 
-        // Replay session registration (mirrors handleEvent auto-registration)
         this.sessionStore.register(entry.sessionId);
 
         const eventName = entry.event.event_name as string | undefined;
