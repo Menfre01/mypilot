@@ -120,7 +120,7 @@ export function createServer(
     };
     wsBus.sendSessionList(msg.sessions, msg.mode, msg.recentEvents, msg.pendingInteractions, targetDeviceId, msg.takeoverOwner);
     if (relayClient) {
-      relayClient.broadcast(msg);
+      relayClient.broadcast(msg, targetDeviceId);
     }
   }
 
@@ -166,6 +166,9 @@ export function createServer(
 
       if (relayClient) {
         relayClient.onMessage(handleClientMessage);
+        relayClient.onAppConnect((deviceId: string, lastEventSeq?: number) => {
+          broadcastSessionState(lastEventSeq, deviceId);
+        });
         await relayClient.connect(cloudflareLink!.url, gatewayId, key);
       }
 

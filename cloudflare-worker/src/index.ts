@@ -42,37 +42,58 @@ type ClientMessage =
 // Wire format: encrypted envelope wrapper
 interface WsEnvelope {
   encrypted?: EncryptedEnvelope;
+  deviceId?: string;
+  targetDeviceId?: string;
+}
+
+// Relay control messages (plaintext, not encrypted)
+interface RelayCtrlMessage {
+  relay: 'app_connect';
+  deviceId: string;
+  lastEventSeq?: number;
 }
 
 // ── Hub Durable Object ─────────────────────────────────────────────────────
 
 export class Hub implements DurableObject {
+  private static readonly CORS_HEADERS: Record<string, string> = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+
   private gateways = new Map<string, WebSocket>();
-  private apps = new Map<string, WebSocket>();
+  private apps = new Map<string, Map<string, WebSocket>>();
   private gatewayKeyHashes = new Map<string, string>();
   private seq = 0;
+  private autoIdCounter = 0;
 
   constructor(_ctx: DurableObjectState, _env: Environment) {}
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    const corsHeaders = Hub.CORS_HEADERS;
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders });
+    }
 
     if (request.method === 'GET' && url.pathname === '/health') {
       return new Response(JSON.stringify({ ok: true, gateways: this.gateways.size }), {
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
     }
 
     if (request.method === 'GET' && url.pathname === '/connect') {
       const gatewayId = url.searchParams.get('gatewayId') ?? '';
       return new Response(JSON.stringify({ hasGateway: this.gateways.has(gatewayId) }), {
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
     }
 
     if (request.method === 'GET' && url.pathname === '/seq') {
       return new Response(JSON.stringify({ seq: this.seq }), {
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
     }
 
@@ -81,7 +102,7 @@ export class Hub implements DurableObject {
       return this.handleWebSocket(url);
     }
 
-    return new Response('Not Found', { status: 404 });
+    return new Response('Not Found', { status: 404, headers: corsHeaders });
   }
 
   private handleWebSocket(url: URL): Response {
@@ -116,13 +137,20 @@ export class Hub implements DurableObject {
     const response = pair[1];
     clientWs.accept();
 
+    const deviceId = url.searchParams.get('deviceId') || `_auto_${++this.autoIdCounter}_${Date.now().toString(36)}`;
+
     if (isApp) {
-      const existing = this.apps.get(gatewayId);
+      let deviceMap = this.apps.get(gatewayId);
+      if (!deviceMap) {
+        deviceMap = new Map();
+        this.apps.set(gatewayId, deviceMap);
+      }
+      const existing = deviceMap.get(deviceId);
       if (existing && existing.readyState === WebSocket.OPEN) {
         existing.close();
       }
-      this.apps.set(gatewayId, clientWs);
-      this.setupAppHandlers(clientWs, gatewayId, lastEventSeq);
+      deviceMap.set(deviceId, clientWs);
+      this.setupAppHandlers(clientWs, gatewayId, deviceId, lastEventSeq);
     } else {
       const existing = this.gateways.get(gatewayId);
       if (existing && existing.readyState === WebSocket.OPEN) {
@@ -149,9 +177,21 @@ export class Hub implements DurableObject {
       const wrapper = payload as WsEnvelope;
       if (!wrapper || !wrapper.encrypted) return;
 
-      const appWs = this.apps.get(gatewayId);
-      if (appWs && appWs.readyState === WebSocket.OPEN) {
-        appWs.send(JSON.stringify(wrapper.encrypted));
+      const deviceMap = this.apps.get(gatewayId);
+      if (!deviceMap) return;
+
+      const serialized = JSON.stringify(wrapper.encrypted);
+      if (wrapper.targetDeviceId) {
+        const appWs = deviceMap.get(wrapper.targetDeviceId);
+        if (appWs && appWs.readyState === WebSocket.OPEN) {
+          appWs.send(serialized);
+        }
+      } else {
+        for (const appWs of deviceMap.values()) {
+          if (appWs.readyState === WebSocket.OPEN) {
+            appWs.send(serialized);
+          }
+        }
       }
     });
 
@@ -161,7 +201,13 @@ export class Hub implements DurableObject {
     });
   }
 
-  private setupAppHandlers(ws: WebSocket, gatewayId: string, lastEventSeq?: number): void {
+  private setupAppHandlers(ws: WebSocket, gatewayId: string, deviceId: string, lastEventSeq?: number): void {
+    const gatewayWs = this.gateways.get(gatewayId);
+    if (gatewayWs && gatewayWs.readyState === WebSocket.OPEN) {
+      const ctrl: RelayCtrlMessage = { relay: 'app_connect', deviceId, ...(lastEventSeq != null && { lastEventSeq }) };
+      gatewayWs.send(JSON.stringify(ctrl));
+    }
+
     ws.addEventListener('message', (event) => {
       this.seq++;
       let payload: unknown;
@@ -176,20 +222,26 @@ export class Hub implements DurableObject {
 
       const gatewayWs = this.gateways.get(gatewayId);
       if (gatewayWs && gatewayWs.readyState === WebSocket.OPEN) {
-        gatewayWs.send(JSON.stringify({ encrypted: envelope }));
+        gatewayWs.send(JSON.stringify({ encrypted: envelope, deviceId }));
       }
     });
 
     ws.addEventListener('close', () => {
-      this.apps.delete(gatewayId);
+      const deviceMap = this.apps.get(gatewayId);
+      if (deviceMap) {
+        deviceMap.delete(deviceId);
+        if (deviceMap.size === 0) this.apps.delete(gatewayId);
+      }
     });
   }
 
   // Test helpers — not part of the Durable Object public API
   getState(): { gateways: number; apps: number; seq: number } {
+    let totalApps = 0;
+    for (const dm of this.apps.values()) totalApps += dm.size;
     return {
       gateways: this.gateways.size,
-      apps: this.apps.size,
+      apps: totalApps,
       seq: this.seq,
     };
   }

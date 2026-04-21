@@ -7,7 +7,8 @@ export interface RelayClient {
   connect(relayUrl: string, gatewayId: string, key: Buffer): Promise<void>;
   disconnect(): void;
   onMessage(handler: (msg: ClientMessage, deviceId: string) => void): void;
-  broadcast(message: GatewayMessage): void;
+  onAppConnect(handler: (deviceId: string, lastEventSeq?: number) => void): void;
+  broadcast(message: GatewayMessage, targetDeviceId?: string): void;
 }
 
 const RECONNECT_BASE_MS = 1_000;
@@ -28,6 +29,7 @@ export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
   let key: Buffer = Buffer.alloc(0);
   let relayUrl = '';
   let messageHandler: ((msg: ClientMessage, deviceId: string) => void) | null = null;
+  let appConnectHandler: ((deviceId: string, lastEventSeq?: number) => void) | null = null;
   let retryCount = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -100,14 +102,22 @@ export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
           return;
         }
 
-        const envelope = payload as { encrypted?: EncryptedEnvelope };
+        const relayCtrl = payload as { relay?: string; deviceId?: string; lastEventSeq?: number };
+        if (relayCtrl.relay === 'app_connect') {
+          appConnectHandler?.(relayCtrl.deviceId ?? gatewayId, relayCtrl.lastEventSeq);
+          return;
+        }
+
+        const envelope = payload as { encrypted?: EncryptedEnvelope; deviceId?: string };
         if (!envelope || !envelope.encrypted) return;
+
+        const msgDeviceId = envelope.deviceId ?? gatewayId;
 
         try {
           const plaintext = decrypt(key, envelope.encrypted);
           const clientMsg = JSON.parse(plaintext) as ClientMessage;
           if (messageHandler) {
-            messageHandler(clientMsg, gatewayId);
+            messageHandler(clientMsg, msgDeviceId);
           }
         } catch {
           // Bad envelope — ignore
@@ -159,11 +169,17 @@ export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
       messageHandler = handler;
     },
 
-    broadcast(message: GatewayMessage): void {
+    onAppConnect(handler: (deviceId: string, lastEventSeq?: number) => void): void {
+      appConnectHandler = handler;
+    },
+
+    broadcast(message: GatewayMessage, targetDeviceId?: string): void {
       if (!ws || ws.readyState !== WS_OPEN) return;
       try {
         const encrypted = encrypt(key, JSON.stringify(message));
-        ws.send(`{"encrypted":${encrypted}}`);
+        const envelope: Record<string, unknown> = { encrypted: JSON.parse(encrypted) };
+        if (targetDeviceId) envelope.targetDeviceId = targetDeviceId;
+        ws.send(JSON.stringify(envelope));
       } catch {
         // Send failed — connection likely broken, will be cleaned up by close handler
       }
