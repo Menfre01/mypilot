@@ -2,6 +2,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SSEHookEvent } from "../../shared/protocol.js";
 
+const HISTORY_DAYS = 7;
+
 export class EventLogger {
   private logDir: string;
 
@@ -29,7 +31,7 @@ export class EventLogger {
     }
   }
 
-  /** Searches today's and yesterday's JSONL logs for events after the given seq. */
+  /** Searches the last 7 days of JSONL logs for events after the given seq. */
   readEventsAfter(afterSeq: number, maxCount: number): { sessionId: string; event: SSEHookEvent }[] {
     const all = this._parseRecentEvents();
     const filtered = all.filter(e => e.seq > afterSeq);
@@ -77,11 +79,10 @@ export class EventLogger {
 
   private _getRecentLogFiles(): string[] {
     const now = new Date();
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-
     const files: string[] = [];
-    for (const d of [yesterday, now]) {
+    for (let i = HISTORY_DAYS - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
       const date = d.toISOString().slice(0, 10);
       const filePath = join(this.logDir, `events-${date}.jsonl`);
       if (existsSync(filePath)) {

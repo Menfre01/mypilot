@@ -7,6 +7,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { waitForMessage, waitForClose, collectMessages, encSend, decRaw, wsUrl } from './ws-test-helpers.js';
+import type { LinkConfig } from '../../shared/protocol.js';
+import { encrypt, decrypt } from './crypto.js';
 
 // ── Helpers ──
 
@@ -507,5 +509,102 @@ describe('createServer', () => {
 
     expect(res.status).toBe(200);
     expect(JSON.parse(res.body)).toEqual({});
+  });
+
+  // ── Relay integration ──
+
+  it('broadcastSessionState sends to relay even when targetDeviceId is set', async () => {
+    const { WebSocketServer } = await import('ws');
+    const relayPort = port + 1;
+    const cloudflareLink: LinkConfig = {
+      id: 'test-relay',
+      type: 'cloudflare',
+      label: 'Test Relay',
+      url: `ws://localhost:${relayPort}`,
+      enabled: true,
+    };
+
+    const relayServer = new WebSocketServer({ port: relayPort });
+    const relayWsPromise = new Promise<import('ws').WebSocket>((resolve) => {
+      relayServer.on('connection', (ws) => {
+        ws.on('message', () => {});
+        resolve(ws);
+      });
+    });
+
+    server = createServer(port, logDir, TEST_KEY, cloudflareLink);
+    await server.start();
+
+    const relayWs = await relayWsPromise;
+    const relayMessages: string[] = [];
+    relayWs.on('message', (data: Buffer) => {
+      relayMessages.push(data.toString());
+    });
+
+    // Local client connects → broadcastSessionState fires
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
+    const initialMsg = await waitForMessage(ws, TEST_KEY);
+    expect(JSON.parse(initialMsg).type).toBe('connected');
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(relayMessages.length).toBeGreaterThanOrEqual(1);
+
+    const relayMsg = JSON.parse(relayMessages[0]);
+    expect(relayMsg.encrypted).toBeDefined();
+    const plaintext = decrypt(TEST_KEY, relayMsg.encrypted);
+    expect(JSON.parse(plaintext).type).toBe('connected');
+
+    // Simulate relay client sending request_sessions (sets targetDeviceId = gatewayId)
+    const requestSessionsMsg = encrypt(TEST_KEY, JSON.stringify({ type: 'request_sessions' }));
+    relayWs.send(`{"encrypted":${requestSessionsMsg}}`);
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(relayMessages.length).toBeGreaterThanOrEqual(2);
+    const lastRelayMsg = JSON.parse(relayMessages[relayMessages.length - 1]);
+    const responsePlaintext = decrypt(TEST_KEY, lastRelayMsg.encrypted);
+    expect(JSON.parse(responsePlaintext).type).toBe('connected');
+
+    ws.close();
+    await waitForClose(ws);
+    relayServer.close();
+  });
+
+  // ── Event recovery on reconnect ──
+
+  it('client recovers events that occurred during disconnection', async () => {
+    server = createServer(port, logDir, TEST_KEY);
+    await server.start();
+
+    const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'd1' }));
+    await waitForMessage(ws1, TEST_KEY);
+
+    const event1 = JSON.stringify({ session_id: 's1', hook_event_name: 'Notification', message: 'before' });
+    const [, msgs1] = await Promise.all([
+      httpReq(port, 'POST', '/hook', event1),
+      collectMessages(ws1, 2, 3000, TEST_KEY),
+    ]);
+    const lastSeq = JSON.parse(msgs1[1]).event.event_id;
+
+    ws1.close();
+    await waitForClose(ws1);
+
+    const event2 = JSON.stringify({ session_id: 's1', hook_event_name: 'Notification', message: 'offline1' });
+    const event3 = JSON.stringify({ session_id: 's1', hook_event_name: 'Notification', message: 'offline2' });
+    await Promise.all([
+      httpReq(port, 'POST', '/hook', event2),
+      httpReq(port, 'POST', '/hook', event3),
+    ]);
+
+    const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'd1', lastEventSeq: lastSeq }));
+    const connectMsg = await waitForMessage(ws2, TEST_KEY);
+    const parsed = JSON.parse(connectMsg);
+    expect(parsed.type).toBe('connected');
+    expect(parsed.recentEvents.length).toBeGreaterThanOrEqual(2);
+    const messages = parsed.recentEvents.map((e: any) => e.event.message);
+    expect(messages).toContain('offline1');
+    expect(messages).toContain('offline2');
+
+    ws2.close();
+    await waitForClose(ws2);
   });
 });

@@ -11,7 +11,6 @@ export interface RelayClient {
 
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
-const MAX_RETRIES = 5;
 const CONNECTION_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const WS_OPEN = 1;
@@ -42,7 +41,7 @@ export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
   }
 
   function scheduleReconnect(): void {
-    if (intentionallyDisconnected || retryCount >= MAX_RETRIES) return;
+    if (intentionallyDisconnected) return;
     const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, retryCount), RECONNECT_MAX_MS);
     retryCount++;
     reconnectTimer = setTimeout(() => {
@@ -164,7 +163,7 @@ export function createRelayClient(wsFactory?: WebSocketFactory): RelayClient {
       if (!ws || ws.readyState !== WS_OPEN) return;
       try {
         const encrypted = encrypt(key, JSON.stringify(message));
-        ws.send(JSON.stringify({ encrypted: JSON.parse(encrypted) }));
+        ws.send(`{"encrypted":${encrypted}}`);
       } catch {
         // Send failed — connection likely broken, will be cleaned up by close handler
       }

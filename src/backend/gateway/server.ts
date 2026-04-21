@@ -117,7 +117,7 @@ export function createServer(
       pendingInteractions: hookHandler.getPendingInteractions(),
     };
     wsBus.sendSessionList(msg.sessions, msg.mode, msg.recentEvents, msg.pendingInteractions, targetDeviceId);
-    if (relayClient && !targetDeviceId) {
+    if (relayClient) {
       relayClient.broadcast(msg);
     }
   }
