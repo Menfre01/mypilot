@@ -101,11 +101,11 @@ export interface PendingInteraction {
 }
 
 export type GatewayMessage =
-  | { type: 'connected'; sessions: SessionInfo[]; mode: GatewayMode; recentEvents: { sessionId: string; event: SSEHookEvent }[]; pendingInteractions: PendingInteraction[] }
+  | { type: 'connected'; sessions: SessionInfo[]; mode: GatewayMode; recentEvents: { sessionId: string; event: SSEHookEvent }[]; pendingInteractions: PendingInteraction[]; takeoverOwner?: string }
   | { type: 'session_start'; session: SessionInfo }
   | { type: 'session_end'; sessionId: string }
   | { type: 'event'; sessionId: string; event: SSEHookEvent }
-  | { type: 'mode_changed'; mode: GatewayMode };
+  | { type: 'mode_changed'; mode: GatewayMode; takeoverOwner?: string };
 
 // ── WebSocket protocol: Frontend -> Gateway ──
 

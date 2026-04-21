@@ -117,6 +117,7 @@ export class WsBus {
     recentEvents: { sessionId: string; event: import('../../shared/protocol.js').SSEHookEvent }[] = [],
     pendingInteractions: PendingInteraction[] = [],
     targetDeviceId?: string,
+    takeoverOwner?: string,
   ): void {
     if (targetDeviceId) {
       this.perClientOfflineQueue.set(targetDeviceId, []);
@@ -129,6 +130,7 @@ export class WsBus {
       mode,
       recentEvents,
       pendingInteractions,
+      takeoverOwner,
     }, targetDeviceId);
   }
 

@@ -32,6 +32,7 @@ export class HookHandler {
   private pendingStore: PendingStore;
   private wsBus: WsBus;
   private mode: GatewayMode = 'bystander';
+  private takeoverOwner: string | null = null;
   private eventLogger: EventLogger | null;
   private _seq = 0;
   private eventHistory: { sessionId: string; event: SSEHookEvent }[] = [];
@@ -133,17 +134,25 @@ export class HookHandler {
     this.pendingStore.releaseSession(sessionId);
   }
 
-  setMode(mode: GatewayMode): void {
-    if (this.mode === mode) return;
+  setMode(mode: GatewayMode, deviceId?: string): void {
+    if (this.mode === mode && this.takeoverOwner === deviceId) return;
     if (this.mode === 'takeover' && mode === 'bystander') {
       this.pendingStore.releaseAll();
+      this.takeoverOwner = null;
+    }
+    if (mode === 'takeover') {
+      this.takeoverOwner = deviceId ?? null;
     }
     this.mode = mode;
-    this.broadcastAll({ type: 'mode_changed', mode });
+    this.broadcastAll({ type: 'mode_changed', mode, takeoverOwner: this.takeoverOwner ?? undefined });
   }
 
   getMode(): GatewayMode {
     return this.mode;
+  }
+
+  getTakeoverOwner(): string | null {
+    return this.takeoverOwner;
   }
 
   getEventHistory(): { sessionId: string; event: SSEHookEvent }[] {

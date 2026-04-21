@@ -115,8 +115,9 @@ export function createServer(
       mode: hookHandler.getMode(),
       recentEvents,
       pendingInteractions: hookHandler.getPendingInteractions(),
+      takeoverOwner: hookHandler.getTakeoverOwner() ?? undefined,
     };
-    wsBus.sendSessionList(msg.sessions, msg.mode, msg.recentEvents, msg.pendingInteractions, targetDeviceId);
+    wsBus.sendSessionList(msg.sessions, msg.mode, msg.recentEvents, msg.pendingInteractions, targetDeviceId, msg.takeoverOwner);
     if (relayClient) {
       relayClient.broadcast(msg);
     }
@@ -125,10 +126,12 @@ export function createServer(
   function handleClientMessage(message: ClientMessage, deviceId: string): void {
     switch (message.type) {
       case 'takeover':
-        hookHandler.setMode('takeover');
+        hookHandler.setMode('takeover', deviceId);
         break;
       case 'release':
-        hookHandler.setMode('bystander');
+        if (hookHandler.getTakeoverOwner() === deviceId) {
+          hookHandler.setMode('bystander');
+        }
         break;
       case 'interact':
         pendingStore.resolve(message.sessionId, message.eventId, message.response);

@@ -77,6 +77,7 @@ function printUsage(): void {
   console.log("Commands:");
   console.log("  start       Start Gateway in background");
   console.log("  stop        Stop background Gateway");
+  console.log("  restart     Restart Gateway (stop + start)");
   console.log("  gateway     Start Gateway in foreground");
   console.log("  status      Check Gateway status");
   console.log("  pair-info   Show pairing info (IP + QR code)");
@@ -483,6 +484,10 @@ export async function runCli(
       break;
     case "stop":
       await stopGateway(pidPath);
+      break;
+    case "restart":
+      await stopGateway(pidPath);
+      await startBackground(pidDir, pidPath);
       break;
     case "gateway":
       await startGateway(pidDir, pidPath);

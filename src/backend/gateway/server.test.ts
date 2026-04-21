@@ -607,4 +607,118 @@ describe('createServer', () => {
     ws2.close();
     await waitForClose(ws2);
   });
+
+  // ── Takeover mutual exclusion ──
+
+  it('takeover is exclusive: second device preempts first', async () => {
+    server = createServer(port, logDir, TEST_KEY);
+    await server.start();
+
+    const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-a' }));
+    await waitForMessage(ws1, TEST_KEY);
+
+    const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-b' }));
+    await waitForMessage(ws2, TEST_KEY);
+
+    // Device A takes over — both devices receive mode_changed
+    encSend(ws1, TEST_KEY, { type: 'takeover' });
+    const [msgA1, msgB1] = await Promise.all([
+      waitForMessage(ws1, TEST_KEY),
+      waitForMessage(ws2, TEST_KEY),
+    ]);
+    expect(JSON.parse(msgA1).mode).toBe('takeover');
+    expect(JSON.parse(msgA1).takeoverOwner).toBe('device-a');
+    expect(JSON.parse(msgB1).mode).toBe('takeover');
+    expect(JSON.parse(msgB1).takeoverOwner).toBe('device-a');
+
+    // Device B preempts — both devices get mode_changed with new owner
+    encSend(ws2, TEST_KEY, { type: 'takeover' });
+    const [msgA2, msgB2] = await Promise.all([
+      waitForMessage(ws1, TEST_KEY),
+      waitForMessage(ws2, TEST_KEY),
+    ]);
+    expect(JSON.parse(msgA2)).toEqual({ type: 'mode_changed', mode: 'takeover', takeoverOwner: 'device-b' });
+    expect(JSON.parse(msgB2)).toEqual({ type: 'mode_changed', mode: 'takeover', takeoverOwner: 'device-b' });
+
+    ws1.close();
+    ws2.close();
+    await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
+  });
+
+  it('non-owner cannot release takeover', async () => {
+    server = createServer(port, logDir, TEST_KEY);
+    await server.start();
+
+    const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'owner' }));
+    await waitForMessage(ws1, TEST_KEY);
+
+    const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'non-owner' }));
+    await waitForMessage(ws2, TEST_KEY);
+
+    // Owner takes over — both devices receive mode_changed
+    encSend(ws1, TEST_KEY, { type: 'takeover' });
+    await Promise.all([
+      waitForMessage(ws1, TEST_KEY),
+      waitForMessage(ws2, TEST_KEY),
+    ]);
+
+    // Non-owner tries to release — should be ignored (no mode_changed broadcast)
+    encSend(ws2, TEST_KEY, { type: 'release' });
+    const raceResult = await Promise.race([
+      waitForMessage(ws2, TEST_KEY).then((m) => m),
+      new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), 300)),
+    ]);
+    expect(raceResult).toBe('timeout');
+
+    // Mode should still be takeover
+    encSend(ws2, TEST_KEY, { type: 'request_sessions' });
+    const stateMsg = await waitForMessage(ws2, TEST_KEY);
+    expect(JSON.parse(stateMsg).mode).toBe('takeover');
+
+    // Owner can release
+    encSend(ws1, TEST_KEY, { type: 'release' });
+    const releaseMsg = await waitForMessage(ws1, TEST_KEY);
+    expect(JSON.parse(releaseMsg).mode).toBe('bystander');
+
+    ws1.close();
+    ws2.close();
+    await Promise.all([waitForClose(ws1), waitForClose(ws2)]);
+  });
+
+  it('takeover persists after owner disconnects, new device can preempt', async () => {
+    server = createServer(port, logDir, TEST_KEY);
+    await server.start();
+
+    const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-a' }));
+    await waitForMessage(ws1, TEST_KEY);
+
+    // Device A takes over
+    encSend(ws1, TEST_KEY, { type: 'takeover' });
+    await waitForMessage(ws1, TEST_KEY);
+
+    // Device A disconnects
+    ws1.close();
+    await waitForClose(ws1);
+
+    // New device connects — mode should still be takeover
+    const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-b' }));
+    const connectMsg = await waitForMessage(ws2, TEST_KEY);
+    const parsed = JSON.parse(connectMsg);
+    expect(parsed.mode).toBe('takeover');
+    expect(parsed.takeoverOwner).toBe('device-a');
+
+    // Device B preempts takeover
+    encSend(ws2, TEST_KEY, { type: 'takeover' });
+    const preemptMsg = await waitForMessage(ws2, TEST_KEY);
+    expect(JSON.parse(preemptMsg).takeoverOwner).toBe('device-b');
+
+    // Device A reconnects — should see device-b as owner
+    const ws3 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-a' }));
+    const reconnectMsg = await waitForMessage(ws3, TEST_KEY);
+    expect(JSON.parse(reconnectMsg).takeoverOwner).toBe('device-b');
+
+    ws2.close();
+    ws3.close();
+    await Promise.all([waitForClose(ws2), waitForClose(ws3)]);
+  });
 });
