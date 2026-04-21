@@ -136,7 +136,7 @@ export class HookHandler {
 
   setMode(mode: GatewayMode, deviceId?: string): void {
     if (this.mode === mode && this.takeoverOwner === deviceId) return;
-    if (this.mode === 'takeover' && mode === 'bystander') {
+    if (this.mode === 'takeover' && (mode === 'bystander' || (mode === 'takeover' && this.takeoverOwner !== deviceId))) {
       this.pendingStore.releaseAll();
       this.takeoverOwner = null;
     }

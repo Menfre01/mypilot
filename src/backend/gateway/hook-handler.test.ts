@@ -288,6 +288,47 @@ describe('HookHandler', () => {
     await expect(p3).resolves.toEqual({});
   });
 
+  // ── Multi-device mutual exclusion ──
+
+  it('switching takeover from device A to device B releases pending', async () => {
+    handler.setMode('takeover', 'device-a');
+
+    // Device A has a pending event
+    const promise = handler.handleEvent(makeEvent('PermissionRequest', 's1'));
+
+    // Device B takes over — should release all pending from A
+    handler.setMode('takeover', 'device-b');
+
+    // The pending promise should resolve with {}
+    const result = await promise;
+    expect(result).toEqual({});
+    expect(handler.getTakeoverOwner()).toBe('device-b');
+  });
+
+  it('same device re-taking over is no-op', () => {
+    const broadcasts = captureBroadcasts(wsBus);
+
+    handler.setMode('takeover', 'device-a');
+    const msgsAfterFirst = broadcasts.length;
+
+    handler.setMode('takeover', 'device-a');
+    expect(broadcasts.length).toBe(msgsAfterFirst); // no extra broadcast
+    expect(handler.getTakeoverOwner()).toBe('device-a');
+  });
+
+  it('broadcasts takeoverOwner in mode_changed', () => {
+    const broadcasts = captureBroadcasts(wsBus);
+
+    handler.setMode('takeover', 'device-a');
+
+    const modeChanged = broadcasts.filter(m => m.type === 'mode_changed');
+    const last = modeChanged[modeChanged.length - 1];
+    expect(last).toBeDefined();
+    if (last!.type === 'mode_changed') {
+      expect(last!.takeoverOwner).toBe('device-a');
+    }
+  });
+
   it('bystander mode never blocks even after takeover mode was active', async () => {
     handler.setMode('takeover');
     handler.setMode('bystander');

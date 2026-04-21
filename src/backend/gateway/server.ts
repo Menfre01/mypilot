@@ -110,12 +110,21 @@ export function createServer(
     // With checkpoint: only events after it (may be empty if up-to-date).
     // Without checkpoint (fresh install): full in-memory history.
     const recentEvents = cachedEvents ?? getRecentEvents(lastEventSeq);
+    const pendingInteractions = hookHandler.getPendingInteractions();
+
+    // Deduplicate: exclude events already in pendingInteractions to avoid
+    // processing the same interaction event twice (once via recentEvents, once via pendingInteractions).
+    const pendingIds = new Set(pendingInteractions.map(p => p.eventId));
+    const dedupedEvents = pendingIds.size > 0
+      ? recentEvents.filter(e => !pendingIds.has(String(e.event.event_id ?? '')))
+      : recentEvents;
+
     const msg: GatewayMessage = {
       type: 'connected',
       sessions: sessionStore.getAll(),
       mode: hookHandler.getMode(),
-      recentEvents,
-      pendingInteractions: hookHandler.getPendingInteractions(),
+      recentEvents: dedupedEvents,
+      pendingInteractions,
       takeoverOwner: hookHandler.getTakeoverOwner() ?? undefined,
     };
     wsBus.sendSessionList(msg.sessions, msg.mode, msg.recentEvents, msg.pendingInteractions, targetDeviceId, msg.takeoverOwner);

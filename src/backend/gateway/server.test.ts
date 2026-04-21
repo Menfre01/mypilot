@@ -608,6 +608,71 @@ describe('createServer', () => {
     await waitForClose(ws2);
   });
 
+  // ── Dedup: recentEvents vs pendingInteractions ──
+
+  it('connected message deduplicates events that are in pendingInteractions', async () => {
+    server = createServer(port, logDir, TEST_KEY);
+    await server.start();
+
+    const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64));
+    await waitForMessage(ws1, TEST_KEY);
+
+    // Switch to takeover mode
+    encSend(ws1, TEST_KEY, { type: 'takeover' });
+    const modeMsg = await waitForMessage(ws1, TEST_KEY);
+    expect(JSON.parse(modeMsg).mode).toBe('takeover');
+
+    // Post a blocking PermissionRequest event
+    const event = JSON.stringify({
+      session_id: 's1',
+      hook_event_name: 'PermissionRequest',
+      tool_name: 'Bash',
+    });
+
+    const eventPromise = new Promise<string>((resolve) => {
+      ws1.on('message', (data) => {
+        try {
+          const msg = decRaw(TEST_KEY, data.toString());
+          if (JSON.parse(msg).type === 'event') resolve(msg);
+        } catch { /* ignore */ }
+      });
+    });
+
+    const hookPromise = httpReq(port, 'POST', '/hook', event);
+    const msg = await eventPromise;
+    const eventId = JSON.parse(msg).event.event_id;
+
+    // Disconnect without resolving — event stays pending
+    ws1.close();
+    await waitForClose(ws1);
+
+    // Reconnect with lastEventSeq=0 so recentEvents includes the pending event
+    const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { lastEventSeq: '0' }));
+    const connectMsg = await waitForMessage(ws2, TEST_KEY);
+    const parsed = JSON.parse(connectMsg);
+
+    // pendingInteractions should have the blocking event
+    expect(parsed.pendingInteractions).toHaveLength(1);
+    expect(parsed.pendingInteractions[0].eventId).toBe(eventId);
+
+    // recentEvents should NOT contain an event with the same event_id
+    const recentIds = parsed.recentEvents.map((e: any) => e.event.event_id);
+    expect(recentIds).not.toContain(eventId);
+
+    // Resolve to unblock the hook
+    encSend(ws2, TEST_KEY, {
+      type: 'interact',
+      sessionId: 's1',
+      eventId,
+      response: { decision: 'allow' },
+    });
+    const hookRes = await hookPromise;
+    expect(hookRes.status).toBe(200);
+
+    ws2.close();
+    await waitForClose(ws2);
+  });
+
   // ── Takeover mutual exclusion ──
 
   it('takeover is exclusive: second device preempts first', async () => {
