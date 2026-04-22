@@ -1,0 +1,13 @@
+name = "mypilot-demo-gateway"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [
+  { name = "DEMO_GATEWAY", class_name = "DemoGatewayDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["DemoGatewayDO"]

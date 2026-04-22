@@ -1,0 +1,14 @@
+{
+  "name": "mypilot-demo-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250414.0",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.12.0"
+  }
+}
