@@ -191,6 +191,8 @@ All hook events are streamed to the app. Events return `{}` immediately — Clau
 
 User interaction events (PermissionRequest, Stop, Elicitation) block until you respond in the MyPilot app. Disconnect automatically returns to bystander mode.
 
+When multiple devices are connected, takeover is exclusive — only one device can hold takeover ownership at a time. If another device initiates takeover, it preempts the current owner, which reverts to bystander mode.
+
 ## Pairing
 
 When you start the gateway, a QR code is displayed in the terminal. Open the MyPilot app and scan it to connect.
