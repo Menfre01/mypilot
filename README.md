@@ -21,17 +21,11 @@ MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你
 
 <p align="center"><strong>iPhone</strong> — 欢迎页 · 实时事件 · 接管模式</p>
 
-## Web 版本
-
-iOS App Store 审核期间，你可以使用 **[Web 版本](https://1c4908f9.mypilot.pages.dev)** 作为替代。Web 版本功能与原生应用一致，支持事件流查看和接管交互。
-
-> **注意**：由于浏览器的 TLS 限制，Web 版本**只能通过 Relay 中继**连接网关，无法直接使用局域网地址。请先完成 [Relay 配置](#relay-中继)后再使用 Web 版本。
-
 ## 环境要求
 
 - **Node.js** >= 20
-- **客户端**：[MyPilot iOS App](https://testflight.apple.com/join/gU2Tw8Hg)（TestFlight 内测）或 [Web 版本](https://1c4908f9.mypilot.pages.dev)
-- **Claude Code** CLI
+- **客户端**：[MyPilot iOS App](https://testflight.apple.com/join/gU2Tw8Hg)（TestFlight 内测）
+- **Claude Code** CLI — [安装指南](https://docs.anthropic.com/en/docs/claude-code/overview#installing-claude-code)
 
 ## 快速开始
 
@@ -74,11 +68,15 @@ Claude Code ──(command hook / curl)──▶ 网关 (:16321) ──(AES-256-
 mypilot gateway                        # 启动网关服务（前台运行）
 mypilot start                          # 后台启动网关
 mypilot stop                           # 停止后台网关
+mypilot restart                        # 重启网关（stop + start）
 mypilot status                         # 查看网关状态（PID、端口）
 mypilot init-hooks                     # 配置 Claude Code Hooks（自动合并到 ~/.claude/settings.json）
 mypilot pair-info                      # 显示配对信息（IP + 二维码），用于重新连接
-mypilot pair-info my.domain.com        # 使用自定义域名（NAT 穿透），端口默认 443
-mypilot pair-info my.domain.com:8080   # 自定义域名 + 端口
+mypilot link list                      # 列出所有通信连接
+mypilot link add <lan|tunnel> <url>    # 添加连接（LAN 直连或隧道）
+mypilot link remove <id>               # 移除连接
+mypilot link enable <id>               # 启用连接
+mypilot link disable <id>              # 禁用连接
 ```
 
 ## Hook 配置
@@ -207,82 +205,13 @@ mypilot pair-info
 
 ### NAT 穿透
 
-如果你的 iPhone 不在同一局域网（例如使用了 frp、ngrok、Cloudflare Tunnel 等隧道服务），请提供你的域名：
+如果你的 iPhone 不在同一局域网（例如使用了 frp、ngrok、Cloudflare Tunnel 等隧道服务），请添加隧道连接：
 
 ```bash
-mypilot pair-info tunnel.example.com        # 默认端口 443
-mypilot pair-info tunnel.example.com:8080   # 自定义端口
+mypilot link add tunnel wss://tunnel.example.com/ws-gateway --label "My Tunnel"
 ```
 
-二维码将使用域名作为主机地址，使 iOS 应用能够通过隧道连接。
-
-### Relay 中继
-
-Relay 通过 Cloudflare Worker 在网关和客户端之间中继 WebSocket 连接，适用于以下场景：
-
-- **Web 版本**：浏览器由于 TLS 限制只能通过 Relay 连接
-- **跨网络访问**：iPhone 不在同一局域网，且没有搭建隧道服务
-- **快速上手**：无需配置域名或端口转发即可远程使用
-
-#### 工作原理
-
-```
-Gateway ──(WSS + AES-256-GCM)──▶ Cloudflare Worker ──(WSS)──▶ Web App / iOS App
-```
-
-Relay 仅转发加密后的消息，无法读取明文内容。
-
-#### 部署 Cloudflare Worker
-
-1. 进入 `cloudflare-worker/` 目录：
-
-```bash
-cd cloudflare-worker
-npm install
-```
-
-2. 登录 Wrangler 并部署：
-
-```bash
-npx wrangler login
-npx wrangler deploy
-```
-
-3. 记下部署后输出的 Worker URL（例如 `wss://mypilot-relay.<your-subdomain>.workers.dev`）
-
-4. 将网关密钥设置为 Worker 环境变量：
-
-```bash
-# 读取本地密钥
-cat ~/.mypilot/key
-
-# 设置为 Worker Secret（输入上一步读取的密钥值）
-npx wrangler secret put GATEWAY_KEY
-```
-
-#### 配置网关使用 Relay
-
-```bash
-# 添加 Relay 连接
-mypilot link add cloudflare wss://mypilot-relay.<your-subdomain>.workers.dev --label "My Relay"
-
-# 查看已配置的连接
-mypilot link list
-
-# 启动网关（自动连接到 Relay）
-mypilot start
-```
-
-网关启动后会自动通过 Relay 广播，客户端扫描二维码即可连接。二维码会自动包含 Relay 地址。
-
-#### 管理连接
-
-```bash
-mypilot link list              # 列出所有连接
-mypilot link remove <id>       # 移除连接
-mypilot link enable <id>       # 启用连接
-mypilot link disable <id>      # 禁用连接
-```
+二维码将自动包含隧道地址，使 iOS 应用能够通过隧道连接。
 
 ## Docker
 
@@ -320,9 +249,7 @@ npm run docker:restart   # 重新构建并重启
 | 二维码无法扫描 | 确保 iPhone 和电脑在同一 WiFi 网络。尝试 `mypilot pair-info` 获取新的二维码。 |
 | 应用无法连接 | 检查防火墙设置，确保本机 16321 端口开放。 |
 | Hook 未触发 | 检查 `~/.claude/settings.json` 中的配置。运行 `mypilot init-hooks` 重新配置。 |
-| 二维码中 IP 不正确 | 设置 `LAN_IP` 环境变量，或启动网关后运行 `mypilot pair-info`。远程访问请使用 `mypilot pair-info <域名>`。 |
-| Web 版本无法连接 | Web 版本必须通过 Relay 连接。请先完成 [Relay 配置](#relay-中继)，确保 `mypilot link list` 显示已启用的 cloudflare 连接。 |
-| Relay 连接断开 | 网关会自动重连。如持续失败，检查 Worker URL 是否正确、`GATEWAY_KEY` 是否与本地密钥一致。 |
+| 二维码中 IP 不正确 | 设置 `LAN_IP` 环境变量，或启动网关后运行 `mypilot pair-info`。远程访问请使用 `mypilot link add tunnel <url>` 添加隧道连接。 |
 | App 问题或建议 | [提交 Issue](../../issues/new/choose) — 网关和 iOS App 的问题与建议均欢迎在此反馈。 |
 
 ## 数据目录

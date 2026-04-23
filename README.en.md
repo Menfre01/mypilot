@@ -21,17 +21,11 @@ MyPilot receives Claude Code hook events and streams them to your iPhone via Web
 
 <p align="center"><strong>iPhone</strong> — session list · live events · takeover mode</p>
 
-## Web App
-
-While the iOS app is pending App Store review, you can use the **[Web App](https://1c4908f9.mypilot.pages.dev)** as an alternative. The web version has feature parity with the native app — event streaming and takeover interaction both work.
-
-> **Note**: Due to browser TLS restrictions, the web app **can only connect via Relay** — it cannot use direct LAN addresses. Please set up [Relay](#relay) before using the web app.
-
 ## Requirements
 
 - **Node.js** >= 20
-- **Client**: [MyPilot iOS App](https://testflight.apple.com/join/gU2Tw8Hg) (TestFlight Beta) or [Web App](https://1c4908f9.mypilot.pages.dev)
-- **Claude Code** CLI
+- **Client**: [MyPilot iOS App](https://testflight.apple.com/join/gU2Tw8Hg) (TestFlight Beta)
+- **Claude Code** CLI — [Installation guide](https://docs.anthropic.com/en/docs/claude-code/overview#installing-claude-code)
 
 ## Quick Start
 
@@ -74,11 +68,15 @@ All WebSocket communication between the Gateway and the MyPilot app is end-to-en
 mypilot gateway                        # Start the Gateway server (foreground)
 mypilot start                          # Start Gateway in background
 mypilot stop                           # Stop background Gateway
+mypilot restart                        # Restart Gateway (stop + start)
 mypilot status                         # Check Gateway status (PID, port)
 mypilot init-hooks                     # Configure Claude Code hooks (auto-merge into ~/.claude/settings.json)
 mypilot pair-info                      # Show pairing info (IP + QR code) for reconnecting
-mypilot pair-info my.domain.com        # Use custom domain (NAT traversal), port defaults to 443
-mypilot pair-info my.domain.com:8080   # Custom domain with port
+mypilot link list                      # List all communication links
+mypilot link add <lan|tunnel> <url>    # Add a link (LAN direct or tunnel)
+mypilot link remove <id>               # Remove a link
+mypilot link enable <id>               # Enable a link
+mypilot link disable <id>              # Disable a link
 ```
 
 ## Hook Configuration
@@ -207,82 +205,13 @@ This displays the pairing QR code and connection details (IP, port, key) without
 
 ### NAT Traversal
 
-If your iPhone is not on the same LAN (e.g., using a tunnel service like frp, ngrok, Cloudflare Tunnel), provide your domain:
+If your iPhone is not on the same LAN (e.g., using a tunnel service like frp, ngrok, Cloudflare Tunnel), add a tunnel link:
 
 ```bash
-mypilot pair-info tunnel.example.com        # defaults to port 443
-mypilot pair-info tunnel.example.com:8080   # custom port
+mypilot link add tunnel wss://tunnel.example.com/ws-gateway --label "My Tunnel"
 ```
 
-The QR code will use the domain as the host, allowing the iOS app to connect through the tunnel.
-
-### Relay
-
-Relay uses a Cloudflare Worker to proxy WebSocket connections between the gateway and clients. It's useful when:
-
-- **Web App**: browsers can only connect via Relay due to TLS restrictions
-- **Cross-network access**: your iPhone is on a different network with no tunnel service set up
-- **Quick start**: remote access without configuring a domain or port forwarding
-
-#### How it works
-
-```
-Gateway ──(WSS + AES-256-GCM)──▶ Cloudflare Worker ──(WSS)──▶ Web App / iOS App
-```
-
-The relay only forwards encrypted messages — it cannot read plaintext content.
-
-#### Deploy the Cloudflare Worker
-
-1. Navigate to the `cloudflare-worker/` directory:
-
-```bash
-cd cloudflare-worker
-npm install
-```
-
-2. Log in to Wrangler and deploy:
-
-```bash
-npx wrangler login
-npx wrangler deploy
-```
-
-3. Note the Worker URL from the deploy output (e.g., `wss://mypilot-relay.<your-subdomain>.workers.dev`)
-
-4. Set your gateway key as a Worker secret:
-
-```bash
-# Read your local key
-cat ~/.mypilot/key
-
-# Set it as the Worker secret (paste the key value from above)
-npx wrangler secret put GATEWAY_KEY
-```
-
-#### Configure the gateway to use Relay
-
-```bash
-# Add the relay link
-mypilot link add cloudflare wss://mypilot-relay.<your-subdomain>.workers.dev --label "My Relay"
-
-# Verify the configuration
-mypilot link list
-
-# Start the gateway (auto-connects to Relay)
-mypilot start
-```
-
-Once the gateway starts, it automatically broadcasts through the relay. Scan the QR code on your client to connect — it automatically includes the relay address.
-
-#### Manage links
-
-```bash
-mypilot link list              # List all links
-mypilot link remove <id>       # Remove a link
-mypilot link enable <id>       # Enable a link
-mypilot link disable <id>      # Disable a link
-```
+The QR code will automatically include the tunnel address, allowing the iOS app to connect through the tunnel.
 
 ## Docker
 
@@ -320,9 +249,7 @@ npm run docker:restart   # Rebuild & restart
 | QR code won't scan | Ensure iPhone and computer are on the same WiFi network. Try `mypilot pair-info` for a fresh QR code. |
 | App can't connect | Check firewall settings. Port 16321 must be open on your machine. |
 | Hooks not firing | Verify hooks are in `~/.claude/settings.json`. Run `mypilot init-hooks` to reconfigure. |
-| Wrong IP in QR code | Set `LAN_IP` env var or run `mypilot pair-info` after starting the gateway. For remote access, use `mypilot pair-info <domain>`. |
-| Web app won't connect | The web app requires Relay. Set up [Relay](#relay) first and verify `mypilot link list` shows an enabled cloudflare link. |
-| Relay keeps disconnecting | The gateway auto-reconnects. If it keeps failing, check that the Worker URL is correct and `GATEWAY_KEY` matches your local key. |
+| Wrong IP in QR code | Set `LAN_IP` env var or run `mypilot pair-info` after starting the gateway. For remote access, use `mypilot link add tunnel <url>` to add a tunnel link. |
 | App issues or suggestions | [Open an issue](../../issues/new/choose) — bugs and feature requests for both the gateway and iOS app are welcome here. |
 
 ## Data Directory
