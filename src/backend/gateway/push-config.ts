@@ -53,15 +53,16 @@ export function generateGatewayId(pidDir: string): string {
   return key.toString('hex').slice(0, 16);
 }
 
-async function postJson<T>(url: string, body: unknown, apiKey?: string): Promise<T | null> {
+async function fetchJson<T>(url: string, options?: { method?: string; body?: unknown; apiKey?: string }): Promise<T | null> {
   try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    const headers: Record<string, string> = {};
+    if (options?.apiKey) headers['Authorization'] = `Bearer ${options.apiKey}`;
+    if (options?.body !== undefined) headers['Content-Type'] = 'application/json';
 
     const response = await fetch(url, {
-      method: 'POST',
+      method: options?.method ?? (options?.body !== undefined ? 'POST' : 'GET'),
       headers,
-      body: JSON.stringify(body),
+      body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
     });
 
     if (!response.ok) return null;
@@ -85,9 +86,9 @@ export async function registerAccount(
   relayUrl: string,
   email: string,
 ): Promise<RegisterResult | null> {
-  const data = await postJson<RegisterResult>(
+  const data = await fetchJson<RegisterResult>(
     `${relayUrl}/api/register`,
-    { email },
+    { body: { email } },
   );
   if (!data?.apiKey) return null;
   return data;
@@ -97,5 +98,5 @@ export async function getUserInfo(
   relayUrl: string,
   apiKey: string,
 ): Promise<PushUserInfo | null> {
-  return postJson<PushUserInfo>(`${relayUrl}/api/user/info`, { apiKey }, apiKey);
+  return fetchJson<PushUserInfo>(`${relayUrl}/api/user/info`, { apiKey });
 }

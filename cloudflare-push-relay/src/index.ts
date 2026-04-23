@@ -23,7 +23,6 @@ interface RegisterRequest {
 }
 
 interface PushRequest {
-  apiKey: string;
   deviceToken: string;
   payload: {
     aps: {
@@ -39,7 +38,6 @@ interface PushRequest {
 }
 
 interface RegisterDeviceRequest {
-  apiKey: string;
   deviceToken: string;
   gatewayId: string;
   platform: string;
@@ -158,11 +156,10 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleVerify(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const apiKey = url.searchParams.get('apiKey');
+  const apiKey = extractApiKey(request);
 
   if (!apiKey) {
-    return jsonResponse({ error: 'API key required' }, 400);
+    return jsonResponse({ error: 'Authorization required' }, 401);
   }
 
   const email = await env.PUSH_KV.get(`apikey:${apiKey}`);
@@ -186,14 +183,18 @@ async function handleVerify(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleDeviceRegister(request: Request, env: Env): Promise<Response> {
+  const apiKey = extractApiKey(request);
+  if (!apiKey) {
+    return jsonResponse({ error: 'Authorization required' }, 401);
+  }
+
   const body = (await request.json()) as RegisterDeviceRequest;
 
-  if (!body.apiKey || !body.deviceToken || !body.gatewayId || !body.platform) {
+  if (!body.deviceToken || !body.gatewayId || !body.platform) {
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
 
-  // Verify API key
-  const user = await verifyApiKey(env, body.apiKey);
+  const user = await verifyApiKey(env, apiKey);
   if (!user) {
     return jsonResponse({ error: 'Invalid API key' }, 401);
   }
@@ -214,6 +215,11 @@ async function handleDeviceRegister(request: Request, env: Env): Promise<Respons
 
 async function handlePush(request: Request, env: Env): Promise<Response> {
   console.log('[PushRelay] Received push request');
+  const apiKey = extractApiKey(request);
+  if (!apiKey) {
+    return jsonResponse({ error: 'Authorization required' }, 401);
+  }
+
   let body: PushRequest;
   try {
     body = (await request.json()) as PushRequest;
@@ -225,13 +231,12 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
   console.log(`[PushRelay] Device token: ${body.deviceToken?.substring(0, 16)}...`);
   console.log(`[PushRelay] Payload: ${JSON.stringify(body.payload?.aps?.alert)}`);
 
-  if (!body.apiKey || !body.deviceToken || !body.payload) {
+  if (!body.deviceToken || !body.payload) {
     console.log('[PushRelay] Missing required fields');
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
 
-  // Verify API key
-  const user = await verifyApiKey(env, body.apiKey);
+  const user = await verifyApiKey(env, apiKey);
   if (!user) {
     console.log('[PushRelay] Invalid API key');
     return jsonResponse({ error: 'Invalid API key' }, 401);
@@ -282,14 +287,18 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleDeviceUnregister(request: Request, env: Env): Promise<Response> {
-  const body = (await request.json()) as { apiKey: string; deviceToken: string };
+  const apiKey = extractApiKey(request);
+  if (!apiKey) {
+    return jsonResponse({ error: 'Authorization required' }, 401);
+  }
 
-  if (!body.apiKey || !body.deviceToken) {
+  const body = (await request.json()) as { deviceToken: string };
+
+  if (!body.deviceToken) {
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
 
-  // Verify API key
-  const user = await verifyApiKey(env, body.apiKey);
+  const user = await verifyApiKey(env, apiKey);
   if (!user) {
     return jsonResponse({ error: 'Invalid API key' }, 401);
   }
@@ -301,11 +310,10 @@ async function handleDeviceUnregister(request: Request, env: Env): Promise<Respo
 }
 
 async function handleUserInfo(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const apiKey = url.searchParams.get('apiKey');
+  const apiKey = extractApiKey(request);
 
   if (!apiKey) {
-    return jsonResponse({ error: 'API key required' }, 400);
+    return jsonResponse({ error: 'Authorization required' }, 401);
   }
 
   const user = await verifyApiKey(env, apiKey);
@@ -331,6 +339,14 @@ async function handleUserInfo(request: Request, env: Env): Promise<Response> {
 }
 
 // ── Helpers ──
+
+function extractApiKey(request: Request): string | null {
+  const auth = request.headers.get('Authorization');
+  if (auth?.startsWith('Bearer ')) {
+    return auth.slice(7).trim() || null;
+  }
+  return null;
+}
 
 async function verifyApiKey(env: Env, apiKey: string): Promise<UserRecord | null> {
   const email = await env.PUSH_KV.get(`apikey:${apiKey}`);
