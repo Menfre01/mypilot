@@ -1,10 +1,15 @@
 import { createServer as createHttpServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { SessionStore } from './session-store.js';
 import { PendingStore } from './pending-store.js';
+import { DeviceStore } from './device-store.js';
 import { WsBus } from './ws-bus.js';
 import { HookHandler, HttpError } from './hook-handler.js';
 import { EventLogger } from './event-logger.js';
+import { PushService } from './push-service.js';
+import type { PushConfigFile } from './push-config.js';
 import type { ClientMessage, GatewayMessage } from '../../shared/protocol.js';
+
+export type { PushConfigFile as PushConfig };
 
 export interface GatewayServer {
   start(): Promise<void>;
@@ -15,9 +20,11 @@ export function createServer(
   port: number,
   logDir: string,
   key: Buffer,
+  pushConfig?: PushConfigFile,
 ): GatewayServer {
   const sessionStore = new SessionStore();
   const pendingStore = new PendingStore();
+  const deviceStore = new DeviceStore();
   const wsBus = new WsBus(key);
   const eventLogger = new EventLogger(logDir);
 
@@ -30,11 +37,17 @@ export function createServer(
       : hookHandler.getEventHistory();
   }
 
+  const pushService = pushConfig
+    ? new PushService(pushConfig.relayUrl, pushConfig.apiKey, pushConfig.gatewayId)
+    : undefined;
+
   const hookHandler = new HookHandler(
     sessionStore,
     pendingStore,
+    deviceStore,
     wsBus,
     eventLogger,
+    pushService,
   );
 
   let httpServer: Server;
@@ -136,6 +149,15 @@ export function createServer(
       case 'delete_session':
         hookHandler.deleteSession(message.sessionId);
         break;
+      case 'register_device':
+        deviceStore.register(deviceId, message.platform);
+        break;
+      case 'register_push':
+        deviceStore.setPushToken(deviceId, message.deviceToken);
+        break;
+      case 'disconnect':
+        deviceStore.setConnected(deviceId, false);
+        break;
     }
   }
 
@@ -147,12 +169,16 @@ export function createServer(
       wsBus.attach(httpServer);
       wsBus.onMessage(handleClientMessage);
       wsBus.onConnect((url, deviceId) => {
+        deviceStore.setConnected(deviceId, true);
         const seqParam = url.searchParams.get('lastEventSeq');
         const lastEventSeq = seqParam != null ? Number(seqParam) : undefined;
         broadcastSessionState(
           Number.isFinite(lastEventSeq) ? lastEventSeq : undefined,
           deviceId,
         );
+      });
+      wsBus.onDisconnect((deviceId) => {
+        deviceStore.setConnected(deviceId, false);
       });
 
       return new Promise((resolve) => {

@@ -10,6 +10,7 @@ import { getOrCreateKey, detectLanIP } from "./gateway/token-store.js";
 import { displayConnectionInfo } from "./gateway/qr-display.js";
 import { mergeHooksIntoSettings, buildHooksConfig } from "./gateway/hooks-config.js";
 import { loadLinksConfig, saveLinksConfig } from "./gateway/link-config.js";
+import { loadPushConfig, savePushConfig, deletePushConfig, generateGatewayId, registerAccount, getUserInfo } from "./gateway/push-config.js";
 import { VALID_LINK_TYPES, type LinkType } from "../shared/protocol.js";
 
 export const PID_DIR = join(homedir(), ".mypilot");
@@ -86,6 +87,11 @@ function printUsage(): void {
   console.log("              link remove <id>");
   console.log("              link enable <id>");
   console.log("              link disable <id>");
+  console.log("  push        Manage push notification config");
+  console.log("              push status");
+  console.log("              push register <email> [--relay <url>]");
+  console.log("              push setup <relay-url> <api-key>");
+  console.log("              push disable");
 }
 
 async function startGateway(pidDir: string, pidPath: string): Promise<void> {
@@ -101,13 +107,19 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
 
   const lanIP = detectLanIP();
   const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
-  const server = createServer(DEFAULT_PORT, logDir, key);
+  const pushConfig = loadPushConfig(pidDir);
+
+  const server = createServer(DEFAULT_PORT, logDir, key, pushConfig ?? undefined);
+
 
   writePidFile(pidPath, process.pid);
 
   await server.start();
 
   console.log(`Gateway running at http://localhost:${DEFAULT_PORT}`);
+  if (pushConfig) {
+    console.log(`Push notifications enabled (relay: ${pushConfig.relayUrl})`);
+  }
   displayConnectionInfo(lanIP, DEFAULT_PORT, key, links);
 
   process.on("SIGINT", async () => {
@@ -424,6 +436,101 @@ function handleLinkCommand(pidDir: string, args: string[]): void {
   process.exit(1);
 }
 
+async function handlePushCommand(pidDir: string, args: string[]): Promise<void> {
+  const subCommand = args[0];
+
+  if (!subCommand || subCommand === 'status') {
+    const config = loadPushConfig(pidDir);
+    if (config) {
+      console.log('');
+      console.log('Push notifications: enabled');
+      console.log(`  Relay URL: ${config.relayUrl}`);
+      console.log(`  Gateway ID: ${config.gatewayId}`);
+      console.log('');
+
+      const userInfo = await getUserInfo(config.relayUrl, config.apiKey);
+      if (userInfo) {
+        console.log(`  Account: ${userInfo.email}`);
+        console.log(`  Plan: ${userInfo.plan}`);
+        console.log(`  Today: ${userInfo.todayCount}/${userInfo.pushLimit} pushes`);
+        console.log(`  Total: ${userInfo.pushCount} pushes`);
+        console.log('');
+      }
+    } else {
+      console.log('');
+      console.log('Push notifications: disabled');
+      console.log('');
+      console.log('To enable, run:');
+      console.log('  mypilot push register <email>');
+      console.log('');
+    }
+    return;
+  }
+
+  if (subCommand === 'register') {
+    const email = args[1];
+    const relayIdx = args.indexOf('--relay');
+    const relayUrl = relayIdx !== -1 && args[relayIdx + 1] ? args[relayIdx + 1] : 'https://push.mypilot.dev';
+
+    if (!email) {
+      console.error('Usage: mypilot push register <email> [--relay <url>]');
+      process.exit(1);
+    }
+
+    console.log(`Registering account: ${email}`);
+    console.log(`Relay URL: ${relayUrl}`);
+    console.log('');
+
+    const result = await registerAccount(relayUrl, email);
+    if (!result) {
+      console.error('Registration failed. Please check the relay URL and try again.');
+      process.exit(1);
+    }
+
+    const gatewayId = generateGatewayId(pidDir);
+    savePushConfig(pidDir, { relayUrl, apiKey: result.apiKey, gatewayId });
+
+    console.log('Registration successful!');
+    console.log(`  API Key: ${result.apiKey}`);
+    console.log(`  Plan: ${result.plan}`);
+    console.log(`  Push Limit: ${result.pushLimit}/day`);
+    console.log(`  Gateway ID: ${gatewayId}`);
+    console.log('');
+    console.log('Restart the gateway to apply changes.');
+    return;
+  }
+
+  if (subCommand === 'setup') {
+    const relayUrl = args[1];
+    const apiKey = args[2];
+
+    if (!relayUrl || !apiKey) {
+      console.error('Usage: mypilot push setup <relay-url> <api-key>');
+      process.exit(1);
+    }
+
+    const gatewayId = generateGatewayId(pidDir);
+    savePushConfig(pidDir, { relayUrl, apiKey, gatewayId });
+
+    console.log('Push notifications configured successfully.');
+    console.log(`  Relay URL: ${relayUrl}`);
+    console.log(`  Gateway ID: ${gatewayId}`);
+    console.log('');
+    console.log('Restart the gateway to apply changes.');
+    return;
+  }
+
+  if (subCommand === 'disable') {
+    deletePushConfig(pidDir);
+    console.log('Push notifications disabled.');
+    console.log('Restart the gateway to apply changes.');
+    return;
+  }
+
+  console.error(`Unknown push sub-command: ${subCommand}`);
+  process.exit(1);
+}
+
 export async function runCli(
   argv: string[],
   pidDir: string = PID_DIR,
@@ -462,6 +569,9 @@ export async function runCli(
       break;
     case "link":
       handleLinkCommand(pidDir, argv.slice(3));
+      break;
+    case "push":
+      await handlePushCommand(pidDir, argv.slice(3));
       break;
     default:
       printUsage();

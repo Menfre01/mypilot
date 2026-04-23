@@ -1,7 +1,9 @@
 import { SessionStore } from './session-store.js';
 import { PendingStore } from './pending-store.js';
+import { DeviceStore } from './device-store.js';
 import { WsBus } from './ws-bus.js';
 import { EventLogger } from './event-logger.js';
+import { PushService } from './push-service.js';
 import {
   isUserInteractionEvent,
   isInteractivePreToolUse,
@@ -11,6 +13,7 @@ import type {
   InteractionResponse,
   SSEHookEvent,
   GatewayMessage,
+  HookEventName,
 } from '../../shared/protocol.js';
 
 export class HttpError extends Error {
@@ -30,7 +33,9 @@ interface RawHookEvent {
 export class HookHandler {
   private sessionStore: SessionStore;
   private pendingStore: PendingStore;
+  private deviceStore: DeviceStore;
   private wsBus: WsBus;
+  private pushService: PushService | null;
   private mode: GatewayMode = 'bystander';
   private takeoverOwner: string | null = null;
   private eventLogger: EventLogger | null;
@@ -47,13 +52,17 @@ export class HookHandler {
   constructor(
     sessionStore: SessionStore,
     pendingStore: PendingStore,
+    deviceStore: DeviceStore,
     wsBus: WsBus,
     eventLogger?: EventLogger,
+    pushService?: PushService,
   ) {
     this.sessionStore = sessionStore;
     this.pendingStore = pendingStore;
+    this.deviceStore = deviceStore;
     this.wsBus = wsBus;
     this.eventLogger = eventLogger ?? null;
+    this.pushService = pushService ?? null;
 
     if (this.eventLogger) {
       const recent = this.eventLogger.loadRecentEvents(this.maxHistory);
@@ -111,6 +120,8 @@ export class HookHandler {
     this.broadcastAll({ type: 'event', sessionId, event: hookEvent });
 
     if (this.mode === 'takeover' && (isUserInteractionEvent(eventName) || isInteractivePreToolUse(eventName, hookEvent))) {
+      this.trySendPush(sessionId, eventId, eventName, hookEvent);
+
       return this.pendingStore.waitForResponse(sessionId, eventId, hookEvent);
     }
 
@@ -163,5 +174,28 @@ export class HookHandler {
 
   getPendingInteractions(): { sessionId: string; eventId: string; event: SSEHookEvent }[] {
     return this.pendingStore.getPending();
+  }
+
+  private static readonly PUSH_THROTTLE_MS = 5000;
+  private lastPushAt = 0;
+
+  private trySendPush(sessionId: string, eventId: string, eventName: string, event: SSEHookEvent): void {
+    if (!this.pushService) return;
+
+    const takeoverDevice = this.deviceStore.getTakeoverIOSDevice(this.takeoverOwner);
+    if (!takeoverDevice?.pushToken || takeoverDevice.connected) return;
+
+    const now = Date.now();
+    if (now - this.lastPushAt < HookHandler.PUSH_THROTTLE_MS) return;
+    this.lastPushAt = now;
+
+    this.pushService.sendPush(takeoverDevice.pushToken, {
+      sessionId,
+      eventId,
+      eventName: eventName as HookEventName,
+      toolName: event.tool_name as string | undefined,
+    }).catch((err) => {
+      console.error('[Push] send failed:', err instanceof Error ? err.message : err);
+    });
   }
 }

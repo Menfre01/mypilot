@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { HookHandler } from './hook-handler.js';
 import { SessionStore } from './session-store.js';
 import { PendingStore } from './pending-store.js';
+import { DeviceStore } from './device-store.js';
 import { WsBus } from './ws-bus.js';
 import type { GatewayMessage } from '../../shared/protocol.js';
 
@@ -27,14 +28,16 @@ function captureBroadcasts(bus: WsBus): GatewayMessage[] {
 describe('HookHandler', () => {
   let sessionStore: SessionStore;
   let pendingStore: PendingStore;
+  let deviceStore: DeviceStore;
   let wsBus: WsBus;
   let handler: HookHandler;
 
   beforeEach(() => {
     sessionStore = new SessionStore();
     pendingStore = new PendingStore();
+    deviceStore = new DeviceStore();
     wsBus = new WsBus(randomBytes(32));
-    handler = new HookHandler(sessionStore, pendingStore, wsBus);
+    handler = new HookHandler(sessionStore, pendingStore, deviceStore, wsBus);
   });
 
   // ── Mode management ──

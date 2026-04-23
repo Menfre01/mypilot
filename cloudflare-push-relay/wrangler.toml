@@ -1,0 +1,19 @@
+name = "mypilot-push-relay"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+account_id = "3ffbdf65f08af7a129505c6c4e4e16c8"
+
+[vars]
+ENVIRONMENT = "production"
+
+# KV namespace for storing device tokens
+[[kv_namespaces]]
+binding = "PUSH_KV"
+id = "24e865cd76024b3f8c8188bbc3a75f48"
+
+# APNs configuration (set via wrangler secret)
+# APNS_KEY_ID - Apple APNs Key ID
+# APNS_TEAM_ID - Apple Developer Team ID
+# APNS_KEY - Apple APNs Auth Key (.p8 content)
+# APNS_TOPIC - Bundle ID (e.g., com.mypilot.app)
+# APNS_ENVIRONMENT - "sandbox" or "production"
