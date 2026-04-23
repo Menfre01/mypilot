@@ -177,23 +177,47 @@ export class HookHandler {
   }
 
   private static readonly PUSH_THROTTLE_MS = 5000;
+  private static readonly STALE_THRESHOLD_MS = 20_000;
   private lastPushAt = 0;
 
   private trySendPush(sessionId: string, eventId: string, eventName: string, event: SSEHookEvent): void {
-    if (!this.pushService) return;
+    if (!this.pushService) {
+      console.log('[Push] skip: pushService not configured');
+      return;
+    }
 
     const takeoverDevice = this.deviceStore.getTakeoverIOSDevice(this.takeoverOwner);
-    if (!takeoverDevice?.pushToken || takeoverDevice.connected) return;
+    if (!takeoverDevice) {
+      console.log('[Push] skip: no takeover iOS device (owner=%s)', this.takeoverOwner);
+      return;
+    }
+    if (!takeoverDevice.pushToken) {
+      console.log('[Push] skip: device %s has no pushToken', takeoverDevice.deviceId);
+      return;
+    }
+    if (takeoverDevice.connected) {
+      const inactiveMs = Date.now() - takeoverDevice.lastSeen;
+      if (inactiveMs < HookHandler.STALE_THRESHOLD_MS) {
+        return;
+      }
+      console.log('[Push] device %s connected but stale (%dms inactive), sending push anyway', takeoverDevice.deviceId, inactiveMs);
+    }
 
     const now = Date.now();
-    if (now - this.lastPushAt < HookHandler.PUSH_THROTTLE_MS) return;
+    if (now - this.lastPushAt < HookHandler.PUSH_THROTTLE_MS) {
+      console.log('[Push] skip: throttled (last push %dms ago)', now - this.lastPushAt);
+      return;
+    }
     this.lastPushAt = now;
 
+    console.log('[Push] sending push to device %s for event %s/%s', takeoverDevice.deviceId, eventName, eventId);
     this.pushService.sendPush(takeoverDevice.pushToken, {
       sessionId,
       eventId,
       eventName: eventName as HookEventName,
       toolName: event.tool_name as string | undefined,
+    }).then((ok) => {
+      if (!ok) console.error('[Push] relay returned failure');
     }).catch((err) => {
       console.error('[Push] send failed:', err instanceof Error ? err.message : err);
     });

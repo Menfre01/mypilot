@@ -130,6 +130,8 @@ export function createServer(
   }
 
   function handleClientMessage(message: ClientMessage, deviceId: string): void {
+    deviceStore.touch(deviceId);
+
     switch (message.type) {
       case 'takeover':
         hookHandler.setMode('takeover', deviceId);
@@ -157,6 +159,7 @@ export function createServer(
         break;
       case 'disconnect':
         deviceStore.setConnected(deviceId, false);
+        wsBus.disconnect(deviceId);
         break;
     }
   }

@@ -53,6 +53,13 @@ export class DeviceStore {
     return undefined;
   }
 
+  touch(deviceId: string): void {
+    const device = this.devices.get(deviceId);
+    if (device) {
+      device.lastSeen = Date.now();
+    }
+  }
+
   remove(deviceId: string): void {
     this.devices.delete(deviceId);
   }
