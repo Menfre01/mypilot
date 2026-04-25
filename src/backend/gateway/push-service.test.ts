@@ -167,4 +167,93 @@ describe('PushService', () => {
       expect(body.payload.aps.alert.body).toBe('Claude wants to use tool');
     });
   });
+
+  describe('buildNotification with zh-CN', () => {
+    it('builds zh-CN notification for PermissionRequest', async () => {
+      const payload: PushPayload = {
+        sessionId: 's1',
+        eventId: 'e1',
+        eventName: 'PermissionRequest',
+        toolName: 'Edit',
+        locale: 'zh-CN',
+      };
+
+      await pushService.sendPush('token', payload);
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.payload.aps.alert.title).toBe('权限请求');
+      expect(body.payload.aps.alert.body).toBe('请求使用 Edit');
+    });
+
+    it('builds zh-CN notification for Stop', async () => {
+      const payload: PushPayload = {
+        sessionId: 's1',
+        eventId: 'e1',
+        eventName: 'Stop',
+        locale: 'zh-CN',
+      };
+
+      await pushService.sendPush('token', payload);
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.payload.aps.alert.title).toBe('停止请求');
+      expect(body.payload.aps.alert.body).toBe('Claude 请求停止');
+    });
+
+    it('builds zh-CN notification for Elicitation', async () => {
+      const payload: PushPayload = {
+        sessionId: 's1',
+        eventId: 'e1',
+        eventName: 'Elicitation',
+        locale: 'zh-CN',
+      };
+
+      await pushService.sendPush('token', payload);
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.payload.aps.alert.title).toBe('问题');
+      expect(body.payload.aps.alert.body).toBe('Claude 有问题');
+    });
+
+    it('builds zh-CN notification for AskUserQuestion', async () => {
+      const payload: PushPayload = {
+        sessionId: 's1',
+        eventId: 'e1',
+        eventName: 'PreToolUse',
+        toolName: 'AskUserQuestion',
+        locale: 'zh-CN',
+      };
+
+      await pushService.sendPush('token', payload);
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.payload.aps.alert.title).toBe('问题');
+      expect(body.payload.aps.alert.body).toBe('Claude 有问题');
+    });
+
+    it('builds zh-CN notification for ExitPlanMode', async () => {
+      const payload: PushPayload = {
+        sessionId: 's1',
+        eventId: 'e1',
+        eventName: 'PreToolUse',
+        toolName: 'ExitPlanMode',
+        locale: 'zh-CN',
+      };
+
+      await pushService.sendPush('token', payload);
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.payload.aps.alert.title).toBe('计划审查');
+      expect(body.payload.aps.alert.body).toBe('Claude 请求退出计划模式');
+    });
+
+    it('builds zh-CN notification for unknown event', async () => {
+      const payload: PushPayload = {
+        sessionId: 's1',
+        eventId: 'e1',
+        eventName: 'UnknownEvent' as PushPayload['eventName'],
+        locale: 'zh-CN',
+      };
+
+      await pushService.sendPush('token', payload);
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.payload.aps.alert.title).toBe('MyPilot');
+      expect(body.payload.aps.alert.body).toBe('新交互事件');
+    });
+  });
 });

@@ -9,6 +9,7 @@ export interface DeviceInfo {
   connected: boolean;
   pushToken?: string;
   lastSeen: number;
+  locale?: string;
 }
 
 export class DeviceStore {
@@ -23,15 +24,17 @@ export class DeviceStore {
           connected: false,
           pushToken: d.pushToken,
           lastSeen: 0,
+          locale: d.locale,
         });
       }
     }
   }
 
-  register(deviceId: string, platform: DevicePlatform): DeviceInfo {
+  register(deviceId: string, platform: DevicePlatform, locale?: string): DeviceInfo {
     const existing = this.devices.get(deviceId);
     if (existing) {
       existing.platform = platform;
+      if (locale !== undefined) existing.locale = locale;
       existing.lastSeen = Date.now();
       return existing;
     }
@@ -40,6 +43,7 @@ export class DeviceStore {
       platform,
       connected: true,
       lastSeen: Date.now(),
+      locale,
     };
     this.devices.set(deviceId, device);
     return device;

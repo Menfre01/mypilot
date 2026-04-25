@@ -157,6 +157,7 @@ describe("runCli", () => {
       expect(createServer).toHaveBeenCalledWith(
         DEFAULT_PORT,
         join(testPidDir, "logs"),
+        testPidDir,
         MOCK_KEY,
         undefined,
       );

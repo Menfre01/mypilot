@@ -6,6 +6,7 @@ export interface PersistedDevice {
   deviceId: string;
   platform: DevicePlatform;
   pushToken?: string;
+  locale?: string;
 }
 
 export interface GatewayState {

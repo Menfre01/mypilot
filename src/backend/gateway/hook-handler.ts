@@ -224,6 +224,7 @@ export class HookHandler {
       eventName: eventName as HookEventName,
       toolName: event.tool_name as string | undefined,
       content: extractContent(event.tool_input),
+      locale: takeoverDevice.locale,
     }).then((ok) => {
       if (!ok) console.error('[Push] relay returned failure');
     }).catch((err) => {

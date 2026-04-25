@@ -52,6 +52,7 @@ export function createServer(
         deviceId: d.deviceId,
         platform: d.platform,
         pushToken: d.pushToken,
+        locale: d.locale,
       }));
 
     saveGatewayState(pidDir, {
@@ -177,7 +178,7 @@ export function createServer(
         hookHandler.deleteSession(message.sessionId);
         break;
       case 'register_device':
-        deviceStore.register(deviceId, message.platform);
+        deviceStore.register(deviceId, message.platform, message.locale);
         break;
       case 'register_push':
         if (deviceStore.setPushToken(deviceId, message.deviceToken)) {

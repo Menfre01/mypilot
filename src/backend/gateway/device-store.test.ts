@@ -22,6 +22,23 @@ describe('DeviceStore', () => {
       const device = store.register('device1', 'android');
       expect(device.platform).toBe('android');
     });
+
+    it('stores locale on new device', () => {
+      const device = store.register('device1', 'ios', 'zh-CN');
+      expect(device.locale).toBe('zh-CN');
+    });
+
+    it('updates locale on re-register when provided', () => {
+      store.register('device1', 'ios', 'en');
+      const device = store.register('device1', 'ios', 'zh-CN');
+      expect(device.locale).toBe('zh-CN');
+    });
+
+    it('preserves locale on re-register when not provided', () => {
+      store.register('device1', 'ios', 'zh-CN');
+      const device = store.register('device1', 'ios');
+      expect(device.locale).toBe('zh-CN');
+    });
   });
 
   describe('setConnected', () => {
@@ -83,6 +100,17 @@ describe('DeviceStore', () => {
       store.register('device2', 'android');
       const all = store.getAll();
       expect(all).toHaveLength(2);
+    });
+  });
+
+  describe('constructor with initial devices', () => {
+    it('restores locale from persisted devices', () => {
+      const s = new DeviceStore([
+        { deviceId: 'd1', platform: 'ios', pushToken: 'tok', locale: 'zh-CN' },
+      ]);
+      const device = s.getAll()[0];
+      expect(device.locale).toBe('zh-CN');
+      expect(device.pushToken).toBe('tok');
     });
   });
 });

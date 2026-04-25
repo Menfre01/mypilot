@@ -1,4 +1,5 @@
 import type { HookEventName } from '../../shared/protocol.js';
+import { t } from './i18n.js';
 
 export interface PushPayload {
   sessionId: string;
@@ -7,6 +8,7 @@ export interface PushPayload {
   toolName?: string;
   /** Brief description of what's being requested (extracted from tool_input) */
   content?: string;
+  locale?: string;
 }
 
 export class PushService {
@@ -81,33 +83,34 @@ function categoryForEvent(eventName: HookEventName): string | null {
 
 function buildNotification(payload: PushPayload): { title: string; body: string } {
   const toolLabel = payload.toolName ?? 'tool';
+  const { locale } = payload;
 
   switch (payload.eventName) {
     case 'PermissionRequest': {
-      let body: string;
+      let bodyText: string;
       if (payload.content) {
         const brief = truncateTail(payload.content, 100);
-        body = `${toolLabel}: ${brief}`;
+        bodyText = `${toolLabel}: ${brief}`;
       } else {
-        body = `请求使用 ${toolLabel}`;
+        bodyText = t('wantsToUse', locale, { tool: toolLabel });
       }
-      return { title: '权限请求', body };
+      return { title: t('permissionRequest', locale), body: bodyText };
     }
     case 'Stop':
     case 'SubagentStop':
-      return { title: '停止请求', body: 'Claude 请求停止' };
+      return { title: t('stopRequest', locale), body: t('wantsToStop', locale) };
     case 'Elicitation':
-      return { title: '问题', body: 'Claude 有问题' };
+      return { title: t('question', locale), body: t('hasAQuestion', locale) };
     case 'PreToolUse':
       if (payload.toolName === 'AskUserQuestion') {
-        return { title: '问题', body: 'Claude 有问题' };
+        return { title: t('question', locale), body: t('hasAQuestion', locale) };
       }
       if (payload.toolName === 'ExitPlanMode') {
-        return { title: '计划审查', body: 'Claude 请求退出计划模式' };
+        return { title: t('planReview', locale), body: t('wantsToExitPlanMode', locale) };
       }
-      return { title: '需要审批', body: `请求使用 ${toolLabel}` };
+      return { title: t('approvalNeeded', locale), body: t('wantsToUse', locale, { tool: toolLabel }) };
     default:
-      return { title: 'MyPilot', body: '新交互事件' };
+      return { title: t('myPilot', locale), body: t('newInteractionEvent', locale) };
   }
 }
 

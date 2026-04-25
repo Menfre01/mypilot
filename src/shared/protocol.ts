@@ -116,7 +116,7 @@ export type ClientMessage =
   | { type: 'interact'; sessionId: string; eventId: string; response: InteractionResponse }
   | { type: 'request_sessions'; lastEventSeq?: number }
   | { type: 'delete_session'; sessionId: string }
-  | { type: 'register_device'; platform: DevicePlatform }
+  | { type: 'register_device'; platform: DevicePlatform; locale?: string }
   | { type: 'register_push'; deviceToken: string }
   | { type: 'disconnect' };
 
