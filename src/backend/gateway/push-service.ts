@@ -5,6 +5,8 @@ export interface PushPayload {
   eventId: string;
   eventName: HookEventName;
   toolName?: string;
+  /** Brief description of what's being requested (extracted from tool_input) */
+  content?: string;
 }
 
 export class PushService {
@@ -22,6 +24,8 @@ export class PushService {
     const { title, body } = buildNotification(payload);
 
     try {
+      const category = categoryForEvent(payload.eventName);
+      console.log('[PushService] event=%s category=%s', payload.eventName, category ?? 'none');
       const response = await fetch(`${this.relayUrl}/api/push`, {
         method: 'POST',
         headers: {
@@ -36,6 +40,7 @@ export class PushService {
               alert: { title, body },
               sound: 'default',
               badge: 1,
+              ...(category ? { category } : {}),
             },
             session_id: payload.sessionId,
             event_id: payload.eventId,
@@ -57,26 +62,56 @@ export class PushService {
   }
 }
 
+const APNS_CATEGORY = {
+  APPROVAL: 'APPROVAL',
+  STOP: 'STOP',
+} as const;
+
+function categoryForEvent(eventName: HookEventName): string | null {
+  switch (eventName) {
+    case 'PermissionRequest':
+      return APNS_CATEGORY.APPROVAL;
+    case 'Stop':
+    case 'SubagentStop':
+      return APNS_CATEGORY.STOP;
+    default:
+      return null;
+  }
+}
+
 function buildNotification(payload: PushPayload): { title: string; body: string } {
   const toolLabel = payload.toolName ?? 'tool';
 
   switch (payload.eventName) {
-    case 'PermissionRequest':
-      return { title: 'Permission Request', body: `Claude wants to use ${toolLabel}` };
+    case 'PermissionRequest': {
+      let body: string;
+      if (payload.content) {
+        const brief = truncateTail(payload.content, 100);
+        body = `${toolLabel}: ${brief}`;
+      } else {
+        body = `请求使用 ${toolLabel}`;
+      }
+      return { title: '权限请求', body };
+    }
     case 'Stop':
     case 'SubagentStop':
-      return { title: 'Stop Request', body: 'Claude wants to stop' };
+      return { title: '停止请求', body: 'Claude 请求停止' };
     case 'Elicitation':
-      return { title: 'Question', body: 'Claude has a question' };
+      return { title: '问题', body: 'Claude 有问题' };
     case 'PreToolUse':
       if (payload.toolName === 'AskUserQuestion') {
-        return { title: 'Question', body: 'Claude has a question' };
+        return { title: '问题', body: 'Claude 有问题' };
       }
       if (payload.toolName === 'ExitPlanMode') {
-        return { title: 'Plan Review', body: 'Claude wants to exit plan mode' };
+        return { title: '计划审查', body: 'Claude 请求退出计划模式' };
       }
-      return { title: 'Approval Needed', body: `Claude wants to use ${toolLabel}` };
+      return { title: '需要审批', body: `请求使用 ${toolLabel}` };
     default:
-      return { title: 'MyPilot', body: 'New interaction event' };
+      return { title: 'MyPilot', body: '新交互事件' };
   }
+}
+
+function truncateTail(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen - 1) + '…';
 }

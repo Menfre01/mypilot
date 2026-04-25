@@ -142,6 +142,9 @@ export function createServer(
         }
         break;
       case 'interact':
+        console.log('[Interact] device=%s session=%s event=%s response=%s',
+          deviceId, message.sessionId, message.eventId,
+          JSON.stringify(message.response).slice(0, 80));
         pendingStore.resolve(message.sessionId, message.eventId, message.response);
         break;
       case 'request_sessions': {

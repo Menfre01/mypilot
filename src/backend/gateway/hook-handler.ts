@@ -216,10 +216,22 @@ export class HookHandler {
       eventId,
       eventName: eventName as HookEventName,
       toolName: event.tool_name as string | undefined,
+      content: extractContent(event.tool_input),
     }).then((ok) => {
       if (!ok) console.error('[Push] relay returned failure');
     }).catch((err) => {
       console.error('[Push] send failed:', err instanceof Error ? err.message : err);
     });
   }
+}
+
+function extractContent(toolInput: unknown): string | undefined {
+  if (!toolInput || typeof toolInput !== 'object') return undefined;
+  const input = toolInput as Record<string, unknown>;
+
+  for (const key of ['command', 'file_path', 'description', 'url', 'query']) {
+    const val = input[key];
+    if (typeof val === 'string') return val;
+  }
+  return undefined;
 }
