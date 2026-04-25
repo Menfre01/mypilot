@@ -65,7 +65,7 @@ describe('createServer', () => {
   // ── Server lifecycle ──
 
   it('start() listens on configured port', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'GET', '/');
@@ -73,7 +73,7 @@ describe('createServer', () => {
   });
 
   it('stop() closes the server', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
     await server.stop();
 
@@ -81,7 +81,7 @@ describe('createServer', () => {
   });
 
   it('start() and stop() can be called multiple times', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
     await server.stop();
     await server.start();
@@ -91,7 +91,7 @@ describe('createServer', () => {
   // ── POST /hook routing ──
 
   it('POST /hook returns 200 for valid event', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const event = JSON.stringify({
@@ -106,7 +106,7 @@ describe('createServer', () => {
   });
 
   it('POST /hook returns 400 for invalid JSON', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'POST', '/hook', 'not json');
@@ -115,7 +115,7 @@ describe('createServer', () => {
   });
 
   it('POST /hook returns 500 for missing session_id', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const event = JSON.stringify({ event_name: 'Notification' });
@@ -127,7 +127,7 @@ describe('createServer', () => {
   // ── GET /pair ──
 
   it('GET /pair returns 200 with valid key', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'GET', `/pair?key=${encodeURIComponent(TEST_KEY_B64)}`);
@@ -138,7 +138,7 @@ describe('createServer', () => {
   });
 
   it('GET /pair returns CORS headers', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'GET', `/pair?key=${encodeURIComponent(TEST_KEY_B64)}`);
@@ -146,7 +146,7 @@ describe('createServer', () => {
   });
 
   it('OPTIONS returns 204 with CORS headers', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'OPTIONS', '/pair');
@@ -156,7 +156,7 @@ describe('createServer', () => {
   });
 
   it('GET /pair returns 403 with invalid key', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'GET', '/pair?key=wrong-key');
@@ -164,7 +164,7 @@ describe('createServer', () => {
   });
 
   it('GET /pair returns 403 without key', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'GET', '/pair');
@@ -174,7 +174,7 @@ describe('createServer', () => {
   // ── Unknown routes ──
 
   it('GET /unknown returns 404', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'GET', '/unknown');
@@ -182,7 +182,7 @@ describe('createServer', () => {
   });
 
   it('GET / returns 404 (no static file serving)', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const res = await httpReq(port, 'GET', '/');
@@ -192,7 +192,7 @@ describe('createServer', () => {
   // ── WebSocket integration ──
 
   it('client connects via WebSocket with valid key', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
@@ -208,7 +208,7 @@ describe('createServer', () => {
   });
 
   it('WebSocket rejects connection without key', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws = new WebSocket(`ws://localhost:${port}/ws-gateway`);
@@ -220,7 +220,7 @@ describe('createServer', () => {
   });
 
   it('WebSocket rejects connection with wrong key', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws = new WebSocket(wsUrl(port, 'wrong'));
@@ -232,7 +232,7 @@ describe('createServer', () => {
   });
 
   it('POST /hook broadcasts event to connected WebSocket client', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
@@ -262,7 +262,7 @@ describe('createServer', () => {
   });
 
   it('client can switch to takeover mode via WebSocket', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
@@ -282,7 +282,7 @@ describe('createServer', () => {
   });
 
   it('client can interact to resolve pending event in takeover mode', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
@@ -339,7 +339,7 @@ describe('createServer', () => {
   });
 
   it('client disconnecting in takeover mode preserves mode', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64));
@@ -365,7 +365,7 @@ describe('createServer', () => {
   });
 
   it('request_sessions client message sends session list', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
@@ -398,7 +398,7 @@ describe('createServer', () => {
   });
 
   it('release client message switches to bystander mode', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
@@ -420,7 +420,7 @@ describe('createServer', () => {
   });
 
   it('pending interactions preserved across client disconnect and reconnect', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64));
@@ -495,7 +495,7 @@ describe('createServer', () => {
   });
 
   it('POST /hook returns non-blocking response in bystander mode', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     // Post a category-1 event (PreToolUse) — in bystander mode should return {} immediately
@@ -513,7 +513,7 @@ describe('createServer', () => {
   // ── Event recovery on reconnect ──
 
   it('client recovers events that occurred during disconnection', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'd1' }));
@@ -552,7 +552,7 @@ describe('createServer', () => {
   // ── Dedup: recentEvents vs pendingInteractions ──
 
   it('connected message deduplicates events that are in pendingInteractions', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64));
@@ -617,7 +617,7 @@ describe('createServer', () => {
   // ── Takeover mutual exclusion ──
 
   it('takeover is exclusive: second device preempts first', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-a' }));
@@ -652,7 +652,7 @@ describe('createServer', () => {
   });
 
   it('non-owner cannot release takeover', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'owner' }));
@@ -692,7 +692,7 @@ describe('createServer', () => {
   });
 
   it('takeover persists after owner disconnects, new device can preempt', async () => {
-    server = createServer(port, logDir, TEST_KEY);
+    server = createServer(port, logDir, logDir, TEST_KEY);
     await server.start();
 
     const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-a' }));

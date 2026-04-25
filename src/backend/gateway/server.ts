@@ -7,6 +7,7 @@ import { HookHandler, HttpError } from './hook-handler.js';
 import { EventLogger } from './event-logger.js';
 import { PushService } from './push-service.js';
 import type { PushConfigFile } from './push-config.js';
+import { loadGatewayState, saveGatewayState } from './gateway-state.js';
 import type { ClientMessage, GatewayMessage } from '../../shared/protocol.js';
 
 export type { PushConfigFile as PushConfig };
@@ -19,12 +20,15 @@ export interface GatewayServer {
 export function createServer(
   port: number,
   logDir: string,
+  pidDir: string,
   key: Buffer,
   pushConfig?: PushConfigFile,
 ): GatewayServer {
+  const savedState = loadGatewayState(pidDir);
+
   const sessionStore = new SessionStore();
   const pendingStore = new PendingStore();
-  const deviceStore = new DeviceStore();
+  const deviceStore = new DeviceStore(savedState?.devices);
   const wsBus = new WsBus(key);
   const eventLogger = new EventLogger(logDir);
 
@@ -41,6 +45,22 @@ export function createServer(
     ? new PushService(pushConfig.relayUrl, pushConfig.apiKey, pushConfig.gatewayId)
     : undefined;
 
+  function persistState(): void {
+    const devices = deviceStore.getAll()
+      .filter(d => d.pushToken)
+      .map(d => ({
+        deviceId: d.deviceId,
+        platform: d.platform,
+        pushToken: d.pushToken,
+      }));
+
+    saveGatewayState(pidDir, {
+      mode: hookHandler.getMode(),
+      takeoverOwner: hookHandler.getTakeoverOwner(),
+      devices,
+    });
+  }
+
   const hookHandler = new HookHandler(
     sessionStore,
     pendingStore,
@@ -48,6 +68,8 @@ export function createServer(
     wsBus,
     eventLogger,
     pushService,
+    savedState ? { mode: savedState.mode, takeoverOwner: savedState.takeoverOwner } : undefined,
+    persistState,
   );
 
   let httpServer: Server;
@@ -158,7 +180,9 @@ export function createServer(
         deviceStore.register(deviceId, message.platform);
         break;
       case 'register_push':
-        deviceStore.setPushToken(deviceId, message.deviceToken);
+        if (deviceStore.setPushToken(deviceId, message.deviceToken)) {
+          persistState();
+        }
         break;
       case 'disconnect':
         deviceStore.setConnected(deviceId, false);

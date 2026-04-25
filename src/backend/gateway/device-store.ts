@@ -1,4 +1,5 @@
 import type { DevicePlatform } from '../../shared/protocol.js';
+import type { PersistedDevice } from './gateway-state.js';
 
 export type { DevicePlatform };
 
@@ -12,6 +13,20 @@ export interface DeviceInfo {
 
 export class DeviceStore {
   private devices = new Map<string, DeviceInfo>();
+
+  constructor(initialDevices?: PersistedDevice[]) {
+    if (initialDevices) {
+      for (const d of initialDevices) {
+        this.devices.set(d.deviceId, {
+          deviceId: d.deviceId,
+          platform: d.platform,
+          connected: false,
+          pushToken: d.pushToken,
+          lastSeen: 0,
+        });
+      }
+    }
+  }
 
   register(deviceId: string, platform: DevicePlatform): DeviceInfo {
     const existing = this.devices.get(deviceId);
@@ -38,12 +53,13 @@ export class DeviceStore {
     }
   }
 
-  setPushToken(deviceId: string, token: string): void {
+  setPushToken(deviceId: string, token: string): boolean {
     const device = this.devices.get(deviceId);
-    if (device) {
-      device.pushToken = token;
-      device.lastSeen = Date.now();
-    }
+    if (!device) return false;
+    if (device.pushToken === token) return false;
+    device.pushToken = token;
+    device.lastSeen = Date.now();
+    return true;
   }
 
   getTakeoverIOSDevice(takeoverOwner: string | null): DeviceInfo | undefined {

@@ -36,14 +36,15 @@ export class HookHandler {
   private deviceStore: DeviceStore;
   private wsBus: WsBus;
   private pushService: PushService | null;
-  private mode: GatewayMode = 'bystander';
-  private takeoverOwner: string | null = null;
+  private mode: GatewayMode;
+  private takeoverOwner: string | null;
   private eventLogger: EventLogger | null;
   private _seq = 0;
   private eventHistory: { sessionId: string; event: SSEHookEvent }[] = [];
   private historyHead = 0;
   private maxHistory = 200;
   private historyCache: { sessionId: string; event: SSEHookEvent }[] | null = null;
+  private onStateChange?: () => void;
 
   private broadcastAll(msg: GatewayMessage): void {
     this.wsBus.broadcast(msg);
@@ -56,6 +57,8 @@ export class HookHandler {
     wsBus: WsBus,
     eventLogger?: EventLogger,
     pushService?: PushService,
+    initialState?: { mode: GatewayMode; takeoverOwner: string | null },
+    onStateChange?: () => void,
   ) {
     this.sessionStore = sessionStore;
     this.pendingStore = pendingStore;
@@ -63,6 +66,9 @@ export class HookHandler {
     this.wsBus = wsBus;
     this.eventLogger = eventLogger ?? null;
     this.pushService = pushService ?? null;
+    this.mode = initialState?.mode ?? 'bystander';
+    this.takeoverOwner = initialState?.takeoverOwner ?? null;
+    this.onStateChange = onStateChange;
 
     if (this.eventLogger) {
       const recent = this.eventLogger.loadRecentEvents(this.maxHistory);
@@ -150,6 +156,7 @@ export class HookHandler {
     }
     this.mode = mode;
     this.broadcastAll({ type: 'mode_changed', mode, takeoverOwner: this.takeoverOwner ?? undefined });
+    this.onStateChange?.();
   }
 
   getMode(): GatewayMode {

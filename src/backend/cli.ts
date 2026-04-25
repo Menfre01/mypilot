@@ -109,7 +109,7 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
   const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
   const pushConfig = loadPushConfig(pidDir);
 
-  const server = createServer(DEFAULT_PORT, logDir, key, pushConfig ?? undefined);
+  const server = createServer(DEFAULT_PORT, logDir, pidDir, key, pushConfig ?? undefined);
 
 
   writePidFile(pidPath, process.pid);
