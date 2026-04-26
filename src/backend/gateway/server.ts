@@ -8,7 +8,7 @@ import { EventLogger } from './event-logger.js';
 import { PushService } from './push-service.js';
 import type { PushConfigFile } from './push-config.js';
 import { loadGatewayState, saveGatewayState } from './gateway-state.js';
-import type { ClientMessage, GatewayMessage } from '../../shared/protocol.js';
+import { PROTOCOL_VERSION, type GatewayConnected, type ClientMessage } from '../../shared/protocol.js';
 
 export type { PushConfigFile as PushConfig };
 
@@ -142,15 +142,16 @@ export function createServer(
       ? recentEvents.filter(e => !pendingIds.has(String(e.event.event_id ?? '')))
       : recentEvents;
 
-    const msg: GatewayMessage = {
+    const msg: GatewayConnected = {
       type: 'connected',
+      protocolVersion: PROTOCOL_VERSION,
       sessions: sessionStore.getAll(),
       mode: hookHandler.getMode(),
       recentEvents: dedupedEvents,
       pendingInteractions,
       takeoverOwner: hookHandler.getTakeoverOwner() ?? undefined,
     };
-    wsBus.sendSessionList(msg.sessions, msg.mode, msg.recentEvents, msg.pendingInteractions, targetDeviceId, msg.takeoverOwner);
+    wsBus.sendSessionList(msg, targetDeviceId);
   }
 
   function handleClientMessage(message: ClientMessage, deviceId: string): void {
@@ -179,9 +180,11 @@ export function createServer(
         hookHandler.deleteSession(message.sessionId);
         break;
       case 'register_device':
+        console.log('[Device] register_device id=%s platform=%s locale=%s', deviceId, message.platform, message.locale ?? '-');
         deviceStore.register(deviceId, message.platform, message.locale);
         break;
       case 'register_push':
+        console.log('[Device] register_push id=%s token=%s... env=%s', deviceId, message.deviceToken.slice(0, 16), message.environment ?? 'undefined');
         if (deviceStore.setPushToken(deviceId, message.deviceToken, message.environment)) {
           persistState();
         }

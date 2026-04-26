@@ -61,6 +61,9 @@ export class PushService {
     const maxRetries = 3;
     const baseDelay = 1000;
 
+    const env = payload.environment ?? 'undefined';
+    console.log('[PushService] sending to relay: env=%s token=%s...', env, deviceToken.slice(0, 16));
+
     // Body is identical for all retries; do not rebuild inside the loop.
     const requestBody = JSON.stringify({
       gatewayId: this.gatewayId,

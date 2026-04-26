@@ -44,6 +44,7 @@ export interface SSEHookEvent {
   session_id: string;
   event_name: string;
   event_id: string;
+  tool_name?: string;
   [key: string]: unknown;
 }
 
@@ -66,6 +67,10 @@ export interface SessionEvent {
 
 export type GatewayMode = 'bystander' | 'takeover';
 
+// ── Protocol version ──
+
+export const PROTOCOL_VERSION = 1;
+
 // ── Gateway → Client messages ──
 
 export type GatewayMessage =
@@ -77,6 +82,7 @@ export type GatewayMessage =
 
 export interface GatewayConnected {
   type: 'connected';
+  protocolVersion: number;
   sessions: SessionInfo[];
   mode: GatewayMode;
   recentEvents: SessionEvent[];
@@ -108,12 +114,17 @@ export interface GatewayModeChanged {
 
 // ── Client → Gateway messages ──
 
+export type PushEnvironment = 'sandbox' | 'production';
+export type DevicePlatform = 'ios' | 'android' | 'web' | 'desktop';
+
 export type ClientMessage =
   | { type: 'takeover' }
   | { type: 'release' }
   | { type: 'interact'; sessionId: string; eventId: string; response: Record<string, unknown> }
   | { type: 'request_sessions'; lastEventSeq?: number }
-  | { type: 'delete_session'; sessionId: string };
+  | { type: 'delete_session'; sessionId: string }
+  | { type: 'register_device'; platform: DevicePlatform; locale?: string }
+  | { type: 'register_push'; deviceToken: string; environment?: PushEnvironment };
 
 // ── Encrypted envelope ──
 

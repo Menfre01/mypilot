@@ -3,6 +3,12 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
+[vars]
+PUSH_RELAY_URL = "https://mypilot-push-relay.menfre.workers.dev"
+
+# Optional: set via `wrangler secret put PUSH_RELAY_API_KEY` to skip auto-registration
+# PUSH_RELAY_API_KEY
+
 [durable_objects]
 bindings = [
   { name = "DEMO_GATEWAY", class_name = "DemoGatewayDO" }

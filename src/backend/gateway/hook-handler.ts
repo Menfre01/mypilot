@@ -205,6 +205,7 @@ export class HookHandler {
     if (takeoverDevice.connected) {
       const inactiveMs = Date.now() - takeoverDevice.lastSeen;
       if (inactiveMs < HookHandler.STALE_THRESHOLD_MS) {
+        console.log('[Push] skip: device %s still connected (%dms inactive), assuming WS delivery', takeoverDevice.deviceId, inactiveMs);
         return;
       }
       console.log('[Push] device %s connected but stale (%dms inactive), sending push anyway', takeoverDevice.deviceId, inactiveMs);

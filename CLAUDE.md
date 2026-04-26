@@ -48,3 +48,15 @@ Data dir: `~/.mypilot/`
 
 - **客户端项目**: `../cc-notify/` — Flutter 移动端应用
 - **架构**: 本项目为服务端，cc-notify 为客户端，采用 C/S 架构
+
+### 协议版本管理
+
+`src/shared/protocol.ts` 中的 `PROTOCOL_VERSION` 定义当前协议版本，客户端项目 `../cc-notify/` 中也有同名常量。
+
+修改规则：
+
+- **新增可选字段** → 不升版本，两边兼容 Tolerant Reader
+- **新增消息类型** → MINOR bump，旧端忽略未知消息
+- **删除/重命名字段、变更加密** → MAJOR bump，旧端断开连接
+- **修改 `PROTOCOL_VERSION` 时** 必须同步修改 `../cc-notify/` 中的对应常量，保持两边值一致
+- **`MIN_CLIENT_VERSION`** 仅在确认不再支持旧客户端时提升

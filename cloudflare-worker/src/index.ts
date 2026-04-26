@@ -5,6 +5,8 @@ export { DemoGatewayDO };
 
 interface Env {
   DEMO_GATEWAY: DurableObjectNamespace;
+  PUSH_RELAY_URL?: string;
+  PUSH_RELAY_API_KEY?: string;
 }
 
 function corsHeaders(): Record<string, string> {

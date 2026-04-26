@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server, IncomingMessage } from 'node:http';
-import type { GatewayMessage, ClientMessage, SessionInfo, GatewayMode, PendingInteraction, EncryptedEnvelope } from '../../shared/protocol.js';
+import type { GatewayConnected, GatewayMessage, ClientMessage, EncryptedEnvelope } from '../../shared/protocol.js';
 import { encrypt, decrypt } from './crypto.js';
 
 export type MessageHandler = (message: ClientMessage, deviceId: string) => void;
@@ -111,27 +111,13 @@ export class WsBus {
     }
   }
 
-  sendSessionList(
-    sessions: SessionInfo[],
-    mode: GatewayMode,
-    recentEvents: { sessionId: string; event: import('../../shared/protocol.js').SSEHookEvent }[] = [],
-    pendingInteractions: PendingInteraction[] = [],
-    targetDeviceId?: string,
-    takeoverOwner?: string,
-  ): void {
+  sendSessionList(msg: GatewayConnected, targetDeviceId?: string): void {
     if (targetDeviceId) {
       this.perClientOfflineQueue.set(targetDeviceId, []);
     } else {
       this.perClientOfflineQueue.clear();
     }
-    this.broadcast({
-      type: 'connected',
-      sessions,
-      mode,
-      recentEvents,
-      pendingInteractions,
-      takeoverOwner,
-    }, targetDeviceId);
+    this.broadcast(msg, targetDeviceId);
   }
 
   onMessage(handler: MessageHandler): void {

@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { WsBus } from './ws-bus.js';
-import type { SessionInfo, GatewayMessage, ClientMessage } from '../../shared/protocol.js';
+import { PROTOCOL_VERSION, type GatewayConnected, type SessionInfo, type GatewayMessage, type ClientMessage } from '../../shared/protocol.js';
 import { waitForOpen, waitForMessage, waitForClose, collectMessages, encSend, wsUrl } from './ws-test-helpers.js';
 
 const TEST_KEY = randomBytes(32);
@@ -43,7 +43,7 @@ describe('WsBus', () => {
     ];
 
     bus.onConnect(() => {
-      bus.sendSessionList(sessions, 'bystander');
+      bus.sendSessionList({ type: 'connected', protocolVersion: PROTOCOL_VERSION, sessions, mode: 'bystander', recentEvents: [], pendingInteractions: [] });
     });
     bus.attach(httpServer);
 
@@ -52,6 +52,7 @@ describe('WsBus', () => {
     const parsed = JSON.parse(msg);
     expect(parsed).toEqual({
       type: 'connected',
+      protocolVersion: PROTOCOL_VERSION,
       sessions,
       mode: 'bystander',
       recentEvents: [],
@@ -96,12 +97,13 @@ describe('WsBus', () => {
     const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
     await waitForOpen(ws);
 
-    bus.sendSessionList(sessions, 'takeover');
+    bus.sendSessionList({ type: 'connected', protocolVersion: PROTOCOL_VERSION, sessions, mode: 'takeover', recentEvents: [], pendingInteractions: [] });
 
     const msg = await waitForMessage(ws, TEST_KEY);
     const parsed = JSON.parse(msg);
     expect(parsed).toEqual({
       type: 'connected',
+      protocolVersion: PROTOCOL_VERSION,
       sessions,
       mode: 'takeover',
       recentEvents: [],
@@ -220,7 +222,7 @@ describe('WsBus', () => {
       // onConnect calls sendSessionList (like the real server does),
       // which clears the queue and sends the connected message instead.
       bus.onConnect(() => {
-        bus.sendSessionList([], 'bystander', []);
+        bus.sendSessionList({ type: 'connected', protocolVersion: PROTOCOL_VERSION, sessions: [], mode: 'bystander', recentEvents: [], pendingInteractions: [] });
       });
 
       const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
@@ -431,12 +433,13 @@ describe('WsBus', () => {
       ];
 
       // Send session list only to device-B
-      bus.sendSessionList(sessions, 'takeover', [], [], 'device-B');
+      bus.sendSessionList({ type: 'connected', protocolVersion: PROTOCOL_VERSION, sessions, mode: 'takeover', recentEvents: [], pendingInteractions: [] }, 'device-B');
 
       // device-B should receive
       const msg2 = await waitForMessage(ws2, TEST_KEY);
       expect(JSON.parse(msg2)).toEqual({
         type: 'connected',
+        protocolVersion: PROTOCOL_VERSION,
         sessions,
         mode: 'takeover',
         recentEvents: [],

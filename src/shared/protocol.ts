@@ -1,3 +1,8 @@
+// ── Protocol version ──
+
+/** Current protocol version. MAJOR bump = breaking changes (reject old clients). */
+export const PROTOCOL_VERSION = 1;
+
 // ── Pairing ──
 
 export const VALID_LINK_TYPES = ['lan', 'tunnel'] as const;
@@ -99,8 +104,18 @@ export interface PendingInteraction {
   event: SSEHookEvent;
 }
 
+export interface GatewayConnected {
+  type: 'connected';
+  protocolVersion: number;
+  sessions: SessionInfo[];
+  mode: GatewayMode;
+  recentEvents: { sessionId: string; event: SSEHookEvent }[];
+  pendingInteractions: PendingInteraction[];
+  takeoverOwner?: string;
+}
+
 export type GatewayMessage =
-  | { type: 'connected'; sessions: SessionInfo[]; mode: GatewayMode; recentEvents: { sessionId: string; event: SSEHookEvent }[]; pendingInteractions: PendingInteraction[]; takeoverOwner?: string }
+  | GatewayConnected
   | { type: 'session_start'; session: SessionInfo }
   | { type: 'session_end'; sessionId: string }
   | { type: 'event'; sessionId: string; event: SSEHookEvent }
