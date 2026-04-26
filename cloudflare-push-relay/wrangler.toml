@@ -16,4 +16,3 @@ id = "24e865cd76024b3f8c8188bbc3a75f48"
 # APNS_TEAM_ID - Apple Developer Team ID
 # APNS_KEY - Apple APNs Auth Key (.p8 content)
 # APNS_TOPIC - Bundle ID (e.g., com.mypilot.app)
-# APNS_ENVIRONMENT - "sandbox" or "production"

@@ -52,6 +52,7 @@ export function createServer(
         deviceId: d.deviceId,
         platform: d.platform,
         pushToken: d.pushToken,
+        pushEnvironment: d.pushEnvironment,
         locale: d.locale,
       }));
 
@@ -181,7 +182,7 @@ export function createServer(
         deviceStore.register(deviceId, message.platform, message.locale);
         break;
       case 'register_push':
-        if (deviceStore.setPushToken(deviceId, message.deviceToken)) {
+        if (deviceStore.setPushToken(deviceId, message.deviceToken, message.environment)) {
           persistState();
         }
         break;

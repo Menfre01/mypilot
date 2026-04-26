@@ -4,7 +4,6 @@ export interface Env {
   APNS_TEAM_ID: string;
   APNS_KEY: string;
   APNS_TOPIC: string; // Bundle ID, e.g., com.mypilot.app
-  APNS_ENVIRONMENT: string; // "sandbox" or "production"
 }
 
 // ── Types ──
@@ -29,6 +28,7 @@ interface AutoRegisterRequest {
 
 interface PushRequest {
   deviceToken: string;
+  environment?: string;
   payload: {
     aps: {
       alert: { title: string; body: string };
@@ -372,7 +372,8 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
   }
 
   // Send push notification via APNs
-  const result = await sendAPNsPush(env, body.deviceToken, body.payload);
+  const environment = body.environment ?? 'sandbox';
+  const result = await sendAPNsPush(env, body.deviceToken, body.payload, environment);
 
   if (result.ok) {
     user.pushCount++;
@@ -509,11 +510,12 @@ async function sendAPNsPush(
   env: Env,
   deviceToken: string,
   payload: PushRequest['payload'],
+  environment: string,
 ): Promise<{ ok: boolean; apnsStatus: number; apnsBody: string }> {
   try {
     const jwtToken = await createAPNsJWT(env);
 
-    const isSandbox = env.APNS_ENVIRONMENT === 'sandbox';
+    const isSandbox = environment === 'sandbox';
     const apnsHost = isSandbox
       ? 'https://api.development.push.apple.com'
       : 'https://api.push.apple.com';
@@ -548,14 +550,8 @@ async function createAPNsJWT(env: Env): Promise<string> {
   const header = { alg: 'ES256', kid: env.APNS_KEY_ID };
   const claims = { iss: env.APNS_TEAM_ID, iat: now };
 
-  const headerB64 = btoa(JSON.stringify(header))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-  const claimsB64 = btoa(JSON.stringify(claims))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+  const headerB64 = toBase64URL(btoa(JSON.stringify(header)));
+  const claimsB64 = toBase64URL(btoa(JSON.stringify(claims)));
 
   const message = `${headerB64}.${claimsB64}`;
 
@@ -578,10 +574,11 @@ async function createAPNsJWT(env: Env): Promise<string> {
     new TextEncoder().encode(message),
   );
 
-  const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+  const signatureB64 = toBase64URL(btoa(String.fromCharCode(...new Uint8Array(signature))));
 
   return `${message}.${signatureB64}`;
+}
+
+function toBase64URL(s: string): string {
+  return s.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }

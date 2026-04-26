@@ -1,11 +1,12 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { DevicePlatform, GatewayMode } from '../../shared/protocol.js';
+import type { DevicePlatform, GatewayMode, APNEnvironment } from '../../shared/protocol.js';
 
 export interface PersistedDevice {
   deviceId: string;
   platform: DevicePlatform;
   pushToken?: string;
+  pushEnvironment?: APNEnvironment;
   locale?: string;
 }
 

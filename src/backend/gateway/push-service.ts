@@ -1,4 +1,4 @@
-import type { HookEventName } from '../../shared/protocol.js';
+import type { HookEventName, APNEnvironment } from '../../shared/protocol.js';
 import { t } from './i18n.js';
 
 export interface PushPayload {
@@ -9,6 +9,13 @@ export interface PushPayload {
   /** Brief description of what's being requested (extracted from tool_input) */
   content?: string;
   locale?: string;
+  environment?: APNEnvironment;
+}
+
+export interface SendResult {
+  ok: boolean;
+  /** Set when APNs reports the device token is no longer registered (HTTP 410). */
+  reason?: 'unregistered';
 }
 
 export class PushService {
@@ -35,7 +42,7 @@ export class PushService {
     return false;
   }
 
-  async sendPush(deviceToken: string, payload: PushPayload): Promise<boolean> {
+  async sendPush(deviceToken: string, payload: PushPayload): Promise<SendResult> {
     const { title, body } = buildNotification(payload);
 
     const category = categoryForEvent(payload.eventName);
@@ -50,7 +57,7 @@ export class PushService {
     body: string,
     category: string | null,
     payload: PushPayload,
-  ): Promise<boolean> {
+  ): Promise<SendResult> {
     const maxRetries = 3;
     const baseDelay = 1000;
 
@@ -58,6 +65,7 @@ export class PushService {
     const requestBody = JSON.stringify({
       gatewayId: this.gatewayId,
       deviceToken,
+      environment: payload.environment,
       payload: {
         aps: {
           alert: { title, body },
@@ -93,15 +101,36 @@ export class PushService {
           signal: controller.signal,
         });
 
-        if (response.ok) return true;
+        if (response.ok) {
+          // Relay returns 200 even when APNs rejects — parse body to confirm
+          const relayBody = await readFirstBytes(response, 500).catch(() => '<read-error>');
+          let relayOk = true;
+          let apnsStatus: number | undefined;
+          try {
+            const parsed = JSON.parse(relayBody);
+            apnsStatus = parsed.apnsStatus;
+            if (parsed.ok === false) {
+              relayOk = false;
+              console.error(
+                '[PushService] APNs rejected push: status=%s body=%s',
+                parsed.apnsStatus ?? '?',
+                parsed.apnsBody ?? relayBody,
+              );
+            }
+          } catch { /* not JSON — assume success */ }
+          if (relayOk) {
+            return { ok: true };
+          }
+          return { ok: false, reason: apnsStatus === 410 ? 'unregistered' : undefined };
+        }
 
         if (response.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
           this.quotaExceeded = true;
           this.quotaResetDate = new Date().toISOString().slice(0, 10);
           console.log('[PushService] Daily quota exceeded, disabling push for today');
-          return false;
+          return { ok: false };
         }
-        if (response.status === HTTP_STATUS.UNAUTHORIZED) return false;
+        if (response.status === HTTP_STATUS.UNAUTHORIZED) return { ok: false };
 
         // Read only first 500 bytes to avoid memory pressure on large error pages
         const relayBody = await readFirstBytes(response, 500).catch(() => '<read-error>');
@@ -122,7 +151,7 @@ export class PushService {
       }
     }
 
-    return false;
+    return { ok: false };
   }
 }
 

@@ -117,7 +117,9 @@ export type ClientMessage =
   | { type: 'request_sessions'; lastEventSeq?: number }
   | { type: 'delete_session'; sessionId: string }
   | { type: 'register_device'; platform: DevicePlatform; locale?: string }
-  | { type: 'register_push'; deviceToken: string }
+  | { type: 'register_push'; deviceToken: string; environment?: APNEnvironment }
   | { type: 'disconnect' };
 
 export type DevicePlatform = 'ios' | 'android' | 'web' | 'desktop';
+
+export type APNEnvironment = 'sandbox' | 'production';

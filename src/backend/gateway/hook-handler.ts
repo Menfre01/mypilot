@@ -238,8 +238,17 @@ export class HookHandler {
       toolName: event.tool_name as string | undefined,
       content: extractContent(event.tool_input),
       locale: takeoverDevice.locale,
-    }).then((ok) => {
-      if (!ok) console.error('[Push] relay returned failure');
+      environment: takeoverDevice.pushEnvironment,
+    }).then((result) => {
+      if (!result.ok) {
+        console.error('[Push] relay returned failure');
+        if (result.reason === 'unregistered') {
+          console.log('[Push] device token unregistered, clearing pushToken for device %s', takeoverDevice.deviceId);
+          if (this.deviceStore.clearPushToken(takeoverDevice.deviceId)) {
+            this.onStateChange?.();
+          }
+        }
+      }
     }).catch((err) => {
       console.error('[Push] send failed:', err instanceof Error ? err.message : err);
     });

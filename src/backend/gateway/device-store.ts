@@ -1,4 +1,4 @@
-import type { DevicePlatform } from '../../shared/protocol.js';
+import type { DevicePlatform, APNEnvironment } from '../../shared/protocol.js';
 import type { PersistedDevice } from './gateway-state.js';
 
 export type { DevicePlatform };
@@ -8,6 +8,7 @@ export interface DeviceInfo {
   platform: DevicePlatform;
   connected: boolean;
   pushToken?: string;
+  pushEnvironment?: APNEnvironment;
   lastSeen: number;
   locale?: string;
 }
@@ -23,6 +24,7 @@ export class DeviceStore {
           platform: d.platform,
           connected: false,
           pushToken: d.pushToken,
+          pushEnvironment: d.pushEnvironment,
           lastSeen: 0,
           locale: d.locale,
         });
@@ -57,7 +59,7 @@ export class DeviceStore {
     }
   }
 
-  setPushToken(deviceId: string, token: string): boolean {
+  setPushToken(deviceId: string, token: string, environment?: APNEnvironment): boolean {
     const device = this.devices.get(deviceId);
     if (!device) return false;
     if (device.pushToken === token) return false;
@@ -71,6 +73,16 @@ export class DeviceStore {
     }
 
     device.pushToken = token;
+    device.pushEnvironment = environment;
+    device.lastSeen = Date.now();
+    return true;
+  }
+
+  clearPushToken(deviceId: string): boolean {
+    const device = this.devices.get(deviceId);
+    if (!device || !device.pushToken) return false;
+    device.pushToken = undefined;
+    device.pushEnvironment = undefined;
     device.lastSeen = Date.now();
     return true;
   }

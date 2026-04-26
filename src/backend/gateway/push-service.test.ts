@@ -37,7 +37,7 @@ describe('PushService', () => {
 
       const result = await pushService.sendPush('device-token-123', payload);
 
-      expect(result).toBe(true);
+      expect(result).toEqual({ ok: true });
       expect(fetchMock).toHaveBeenCalledWith(
         'https://push.example.com/api/push',
         expect.objectContaining({
@@ -74,7 +74,7 @@ describe('PushService', () => {
       await vi.advanceTimersByTimeAsync(10_000);
       const result = await promise;
 
-      expect(result).toBe(false);
+      expect(result).toEqual({ ok: false });
       expect(fetchMock).toHaveBeenCalledTimes(3);
     });
 
@@ -91,7 +91,7 @@ describe('PushService', () => {
       await vi.advanceTimersByTimeAsync(10_000);
       const result = await promise;
 
-      expect(result).toBe(false);
+      expect(result).toEqual({ ok: false });
       expect(fetchMock).toHaveBeenCalledTimes(3);
     });
 
@@ -106,7 +106,7 @@ describe('PushService', () => {
 
       const result = await pushService.sendPush('device-token-123', payload);
 
-      expect(result).toBe(false);
+      expect(result).toEqual({ ok: false });
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });
