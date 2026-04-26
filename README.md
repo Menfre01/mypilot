@@ -46,9 +46,11 @@ mypilot start
 
 ```
 Claude Code ──(command hook / curl)──▶ 网关 (:16321) ──(AES-256-GCM WebSocket)──▶ MyPilot App (设备 A)
-                                        ├── POST /hook         ← Hook 事件接口       └──▶ MyPilot App (设备 B)
-                                        ├── GET  /pair         ← 密钥验证
-                                        └── WS   /ws-gateway   ← 加密 WebSocket（多设备）
+                                        │  ├── POST /hook         ← Hook 事件接口       └──▶ MyPilot App (设备 B)
+                                        │  ├── GET  /pair         ← 密钥验证
+                                        │  └── WS   /ws-gateway   ← 加密 WebSocket（多设备）
+                                        │
+                                        └──▶ Push Relay ──(APNs)──▶ MyPilot App（推送通知）
 ```
 
 网关与 MyPilot 应用之间的所有 WebSocket 通信均使用 **AES-256-GCM** 端到端加密，密钥通过二维码分发。同一密钥同时用于连接认证和消息加密，无需单独的 Token。
@@ -77,6 +79,9 @@ mypilot link add <lan|tunnel> <url>    # 添加连接（LAN 直连或隧道）
 mypilot link remove <id>               # 移除连接
 mypilot link enable <id>               # 启用连接
 mypilot link disable <id>              # 禁用连接
+mypilot push status                    # 查看推送通知状态
+mypilot push setup <relay-url> <api-key>  # 配置推送通知
+mypilot push disable                   # 禁用推送通知
 ```
 
 ## Hook 配置
@@ -260,6 +265,8 @@ npm run docker:restart   # 重新构建并重启
 ~/.mypilot/
 ├── key              # AES-256-GCM 加密密钥
 ├── gateway.pid      # 后台模式的 PID 文件
+├── push.json        # 推送通知配置
+├── links.json       # 通信链接配置
 └── logs/
     └── events-YYYY-MM-DD.jsonl   # 按天存储的事件日志
 ```

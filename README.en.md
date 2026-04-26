@@ -46,9 +46,11 @@ Scan the QR code displayed in your terminal with the MyPilot app on your iPhone.
 
 ```
 Claude Code ──(command hook / curl)──▶ Gateway (:16321) ──(AES-256-GCM WebSocket)──▶ MyPilot App (device A)
-                                        ├── POST /hook         ← hook event endpoint       └──▶ MyPilot App (device B)
-                                        ├── GET  /pair         ← key validation
-                                        └── WS   /ws-gateway   ← encrypted WebSocket (multi-device)
+                                        │  ├── POST /hook         ← hook event endpoint       └──▶ MyPilot App (device B)
+                                        │  ├── GET  /pair         ← key validation
+                                        │  └── WS   /ws-gateway   ← encrypted WebSocket (multi-device)
+                                        │
+                                        └──▶ Push Relay ──(APNs)──▶ MyPilot App (push notifications)
 ```
 
 All WebSocket communication between the Gateway and the MyPilot app is end-to-end encrypted with **AES-256-GCM** using a pre-shared key distributed via QR code. The same key is used for both connection authentication and message encryption — no separate token is needed.
@@ -77,6 +79,9 @@ mypilot link add <lan|tunnel> <url>    # Add a link (LAN direct or tunnel)
 mypilot link remove <id>               # Remove a link
 mypilot link enable <id>               # Enable a link
 mypilot link disable <id>              # Disable a link
+mypilot push status                    # Check push notification status
+mypilot push setup <relay-url> <api-key>  # Configure push notifications
+mypilot push disable                   # Disable push notifications
 ```
 
 ## Hook Configuration
@@ -260,6 +265,8 @@ npm run docker:restart   # Rebuild & restart
 ~/.mypilot/
 ├── key              # AES-256-GCM encryption key
 ├── gateway.pid      # PID file for background mode
+├── push.json        # Push notification config
+├── links.json       # Communication links config
 └── logs/
     └── events-YYYY-MM-DD.jsonl   # Daily event logs
 ```

@@ -15,6 +15,8 @@ npm run dev           # Start Gateway (tsx hot reload)
 npm run stop:dev      # Stop dev server
 npm run restart:dev   # Restart dev server
 npm run build         # Build backend (tsc)
+npm start             # Start Gateway (production)
+npm stop              # Stop Gateway (production)
 npm test              # Run tests (vitest)
 npm run typecheck     # Type check only
 
@@ -30,11 +32,19 @@ npm run docker:down    # Stop Docker container
 - `src/backend/gateway/server.ts` — HTTP + WebSocket server
 - `src/backend/gateway/hook-handler.ts` — Hook event processing
 - `src/backend/gateway/ws-bus.ts` — WebSocket message bus
+- `src/backend/gateway/crypto.ts` — AES-256-GCM encryption
+- `src/backend/gateway/device-store.ts` — Device management
+- `src/backend/gateway/gateway-state.ts` — Gateway state management
+- `src/backend/gateway/hooks-config.ts` — Hooks configuration
+- `src/backend/gateway/link-config.ts` — Link configuration
+- `src/backend/gateway/push-config.ts` — Push notification configuration
+- `src/backend/gateway/push-service.ts` — Push notification service
 - `src/backend/gateway/qr-display.ts` — Terminal QR code
 - `src/backend/gateway/event-logger.ts` — JSONL event persistence
 - `src/backend/gateway/token-store.ts` — Token management
 - `src/backend/gateway/session-store.ts` — Session tracking
 - `src/backend/gateway/pending-store.ts` — Pending interaction queue
+- `src/backend/gateway/i18n.ts` — Internationalization
 - `src/shared/protocol.ts` — Protocol types (GatewayMessage, ClientMessage)
 - `src/shared/events.ts` — Event classification
 
