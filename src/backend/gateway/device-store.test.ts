@@ -59,6 +59,25 @@ describe('DeviceStore', () => {
       store.setPushToken('device1', 'token123');
       expect(store.getAll()[0].pushToken).toBe('token123');
     });
+
+    it('removes old device when same pushToken registered under new deviceId', () => {
+      store.register('device1', 'ios');
+      store.setPushToken('device1', 'token123');
+      store.register('device2', 'ios');
+      store.setPushToken('device2', 'token123');
+
+      const all = store.getAll();
+      expect(all).toHaveLength(1);
+      expect(all[0].deviceId).toBe('device2');
+    });
+
+    it('does nothing for same deviceId and same pushToken', () => {
+      store.register('device1', 'ios');
+      store.setPushToken('device1', 'token123');
+      const changed = store.setPushToken('device1', 'token123');
+      expect(changed).toBe(false);
+      expect(store.getAll()).toHaveLength(1);
+    });
   });
 
   describe('getTakeoverIOSDevice', () => {

@@ -22,18 +22,18 @@ describe('WsBus', () => {
   });
 
   afterEach(async () => {
-    // Close bus first (closes all WebSocket connections)
-    bus.close();
-    // Give connections time to fully close before shutting down HTTP server
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Close bus first — wait for WebSocketServer to fully shut down
+    await bus.close();
+    // Force-close all connections on the HTTP server
+    httpServer.closeAllConnections();
+    // Close the HTTP server and wait for it to fully shut down
     await new Promise<void>((resolve) => {
-      let done = false;
-      const finish = () => { if (!done) { done = true; resolve(); } };
-      httpServer.close(() => finish());
+      httpServer.close(() => resolve());
+      // Safety timeout: force-resolve after 2s
       setTimeout(() => {
-        httpServer.closeAllConnections?.();
-        finish();
-      }, 300);
+        httpServer.closeAllConnections();
+        resolve();
+      }, 2000);
     });
   });
 
@@ -377,8 +377,7 @@ describe('WsBus', () => {
 
       const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
       const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-B' }));
-      await waitForOpen(ws1);
-      await waitForOpen(ws2);
+      await Promise.all([waitForOpen(ws1), waitForOpen(ws2)]);
 
       encSend(ws1, TEST_KEY, { type: 'takeover' });
       await new Promise((resolve) => setTimeout(resolve, 150));
@@ -405,8 +404,7 @@ describe('WsBus', () => {
 
       const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
       const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-B' }));
-      await waitForOpen(ws1);
-      await waitForOpen(ws2);
+      await Promise.all([waitForOpen(ws1), waitForOpen(ws2)]);
 
       ws1.close();
       await waitForClose(ws1);
@@ -459,8 +457,7 @@ describe('WsBus', () => {
 
       const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
       const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-B' }));
-      await waitForOpen(ws1);
-      await waitForOpen(ws2);
+      await Promise.all([waitForOpen(ws1), waitForOpen(ws2)]);
 
       bus.disconnect('device-A');
       await waitForClose(ws1);
@@ -483,8 +480,7 @@ describe('WsBus', () => {
 
       const ws1 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-A' }));
       const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64, { deviceId: 'device-B' }));
-      await waitForOpen(ws1);
-      await waitForOpen(ws2);
+      await Promise.all([waitForOpen(ws1), waitForOpen(ws2)]);
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       bus.disconnect();

@@ -46,6 +46,16 @@ vi.mock("./gateway/hooks-config.js", () => ({
   })),
 }));
 
+vi.mock("./gateway/push-config.js", () => ({
+  loadPushConfig: vi.fn(() => null),
+  savePushConfig: vi.fn(),
+  deletePushConfig: vi.fn(),
+  generateGatewayId: vi.fn(() => "6161616161616161"),
+  autoRegisterPush: vi.fn(() => null),
+  getUserInfo: vi.fn(() => null),
+  DEFAULT_RELAY_URL: "https://mypilot-push-relay.menfre.workers.dev",
+}));
+
 vi.mock("node:readline", () => ({
   createInterface: vi.fn(() => ({
     question: (_prompt: string, cb: (answer: string) => void) => cb("y"),

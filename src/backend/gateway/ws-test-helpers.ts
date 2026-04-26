@@ -1,10 +1,19 @@
 import { WebSocket } from 'ws';
 import { encrypt, decrypt } from './crypto.js';
 
-export function waitForOpen(ws: WebSocket): Promise<void> {
+export async function waitForOpen(ws: WebSocket, timeoutMs = 5000): Promise<void> {
   return new Promise((resolve, reject) => {
-    ws.once('open', resolve);
-    ws.once('error', reject);
+    const timer = setTimeout(() => {
+      reject(new Error(`WebSocket open timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    ws.once('open', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.once('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
   });
 }
 
@@ -21,10 +30,16 @@ export function waitForMessage(ws: WebSocket, key?: Buffer): Promise<string> {
   });
 }
 
-export function waitForClose(ws: WebSocket): Promise<void> {
-  return new Promise((resolve) => {
+export function waitForClose(ws: WebSocket, timeoutMs = 5000): Promise<void> {
+  return new Promise((resolve, reject) => {
     if (ws.readyState === ws.CLOSED) return resolve();
-    ws.once('close', resolve);
+    const timer = setTimeout(() => {
+      reject(new Error(`WebSocket close timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    ws.once('close', () => {
+      clearTimeout(timer);
+      resolve();
+    });
   });
 }
 

@@ -157,12 +157,15 @@ export class WsBus {
     }
   }
 
-  close(): void {
+  close(): Promise<void> {
     this.disconnect();
-    if (this.wss) {
-      this.wss.close();
-      this.wss = null;
-    }
+    if (!this.wss) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.wss!.close(() => {
+        this.wss = null;
+        resolve();
+      });
+    });
   }
 
   hasClient(deviceId?: string): boolean {

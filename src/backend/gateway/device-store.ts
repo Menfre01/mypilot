@@ -61,6 +61,15 @@ export class DeviceStore {
     const device = this.devices.get(deviceId);
     if (!device) return false;
     if (device.pushToken === token) return false;
+
+    // 同一个 pushToken 只能属于一个设备，删除旧 deviceId 记录
+    for (const [id, d] of this.devices) {
+      if (id !== deviceId && d.pushToken === token) {
+        this.devices.delete(id);
+        break;
+      }
+    }
+
     device.pushToken = token;
     device.lastSeen = Date.now();
     return true;

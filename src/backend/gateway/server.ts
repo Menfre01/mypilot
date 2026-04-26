@@ -220,7 +220,7 @@ export function createServer(
 
     async stop(): Promise<void> {
       pendingStore.releaseAll();
-      wsBus.close();
+      await wsBus.close();
       return new Promise((resolve) => {
         if (httpServer) {
           httpServer.close(() => resolve());
