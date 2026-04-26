@@ -21,6 +21,12 @@ assets/iphone-*.png
 tsconfig.json
 tsconfig.build.json
 
+# Dependencies
+node_modules/
+
+# Cloudflare Worker sub-project
+cloudflare-push-relay/
+
 # IDE and OS
 .vscode/
 .idea/
