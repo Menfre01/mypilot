@@ -183,9 +183,9 @@ export class HookHandler {
     return this.pendingStore.getPending();
   }
 
-  private static readonly PUSH_THROTTLE_MS = 5000;
+  private static readonly DEDUP_WINDOW_MS = 2000;
   private static readonly STALE_THRESHOLD_MS = 20_000;
-  private lastPushAt = 0;
+  private recentPushes = new Map<string, number>();
 
   private trySendPush(sessionId: string, eventId: string, eventName: string, event: SSEHookEvent): void {
     if (!this.pushService) {
@@ -216,11 +216,19 @@ export class HookHandler {
     }
 
     const now = Date.now();
-    if (now - this.lastPushAt < HookHandler.PUSH_THROTTLE_MS) {
-      console.log('[Push] skip: throttled (last push %dms ago)', now - this.lastPushAt);
+    const dedupKey = `${eventName}:${event.tool_name ?? ''}`;
+    const last = this.recentPushes.get(dedupKey);
+    if (last !== undefined && now - last < HookHandler.DEDUP_WINDOW_MS) {
+      console.log('[Push] skip: dedup %s (%dms ago)', dedupKey, now - last);
       return;
     }
-    this.lastPushAt = now;
+    this.recentPushes.set(dedupKey, now);
+    // Clean stale entries
+    if (this.recentPushes.size > 20) {
+      for (const [k, t] of this.recentPushes) {
+        if (now - t > HookHandler.DEDUP_WINDOW_MS * 2) this.recentPushes.delete(k);
+      }
+    }
 
     console.log('[Push] sending push to device %s for event %s/%s', takeoverDevice.deviceId, eventName, eventId);
     this.pushService.sendPush(takeoverDevice.pushToken, {
