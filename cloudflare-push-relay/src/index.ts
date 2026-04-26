@@ -10,7 +10,8 @@ export interface Env {
 // ── Types ──
 
 interface UserRecord {
-  email: string;
+  email?: string;
+  gatewayId?: string;
   apiKey: string;
   plan: 'free' | 'pro';
   pushCount: number;
@@ -20,6 +21,10 @@ interface UserRecord {
 
 interface RegisterRequest {
   email: string;
+}
+
+interface AutoRegisterRequest {
+  gatewayId: string;
 }
 
 interface PushRequest {
@@ -70,7 +75,15 @@ export default {
         return jsonResponse({ ok: true });
       }
 
-      // Registration flow
+      if (path === '/api/auto-register' && request.method === 'POST') {
+        return await handleAutoRegister(request, env);
+      }
+
+      if (path === '/api/upgrade' && request.method === 'POST') {
+        return await handleUpgrade(request, env);
+      }
+
+      // Registration flow (retained for future paywall)
       if (path === '/api/register' && request.method === 'POST') {
         return await handleRegister(request, env);
       }
@@ -142,9 +155,9 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     createdAt: Date.now(),
   };
 
-  // Store user
+  // Store user (use full KV key in apikey mapping for consistency with auto-register)
   await env.PUSH_KV.put(`user:${email}`, JSON.stringify(user));
-  await env.PUSH_KV.put(`apikey:${apiKey}`, email);
+  await env.PUSH_KV.put(`apikey:${apiKey}`, `user:${email}`);
 
   return jsonResponse({
     ok: true,
@@ -152,6 +165,96 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     plan: user.plan,
     pushLimit: user.pushLimit,
     message: 'Account created successfully',
+  });
+}
+
+async function handleAutoRegister(request: Request, env: Env): Promise<Response> {
+  const body = (await request.json()) as AutoRegisterRequest;
+
+  if (!body.gatewayId) {
+    return jsonResponse({ error: 'gatewayId required' }, 400);
+  }
+
+  const gatewayId = body.gatewayId.trim();
+  const storageKey = `gw:${gatewayId}`;
+
+  // Check if already registered
+  const existingUser = await env.PUSH_KV.get(storageKey, 'json');
+  if (existingUser) {
+    const user = existingUser as UserRecord;
+    return jsonResponse({
+      ok: true,
+      apiKey: user.apiKey,
+      plan: user.plan,
+      pushLimit: user.pushLimit,
+      message: 'Already registered',
+    });
+  }
+
+  // Generate API key
+  const apiKey = generateApiKey();
+
+  const user: UserRecord = {
+    gatewayId,
+    apiKey,
+    plan: 'free',
+    pushCount: 0,
+    pushLimit: FREE_PUSH_LIMIT,
+    createdAt: Date.now(),
+  };
+
+  await env.PUSH_KV.put(storageKey, JSON.stringify(user));
+  await env.PUSH_KV.put(`apikey:${apiKey}`, storageKey);
+
+  return jsonResponse({
+    ok: true,
+    apiKey,
+    plan: user.plan,
+    pushLimit: user.pushLimit,
+    message: 'Auto-registered successfully',
+  });
+}
+
+async function handleUpgrade(request: Request, env: Env): Promise<Response> {
+  const body = (await request.json()) as { apiKey?: string; email?: string };
+
+  if (!body.apiKey) {
+    return jsonResponse({ error: 'apiKey required' }, 400);
+  }
+
+  const verified = await verifyApiKey(env, body.apiKey);
+  if (!verified) {
+    return jsonResponse({ error: 'Invalid API key' }, 401);
+  }
+
+  const { user, storageKey } = verified;
+
+  if (user.plan === 'pro') {
+    return jsonResponse({ ok: true, plan: 'pro', message: 'Already on pro plan' });
+  }
+
+  user.plan = 'pro';
+  user.pushLimit = Infinity as unknown as number;
+
+  // If email provided, migrate from gw:{gatewayId} to user:{email}
+  if (body.email && !user.email) {
+    const email = body.email.toLowerCase().trim();
+    const newKey = `user:${email}`;
+    user.email = email;
+
+    await env.PUSH_KV.put(newKey, JSON.stringify(user));
+    await env.PUSH_KV.put(`apikey:${body.apiKey}`, newKey);
+    if (storageKey.startsWith('gw:')) {
+      await env.PUSH_KV.delete(storageKey);
+    }
+  } else {
+    await env.PUSH_KV.put(storageKey, JSON.stringify(user));
+  }
+
+  return jsonResponse({
+    ok: true,
+    plan: 'pro',
+    message: 'Upgraded to pro',
   });
 }
 
@@ -194,8 +297,8 @@ async function handleDeviceRegister(request: Request, env: Env): Promise<Respons
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
 
-  const user = await verifyApiKey(env, apiKey);
-  if (!user) {
+  const verified = await verifyApiKey(env, apiKey);
+  if (!verified) {
     return jsonResponse({ error: 'Invalid API key' }, 401);
   }
 
@@ -203,8 +306,8 @@ async function handleDeviceRegister(request: Request, env: Env): Promise<Respons
   await env.PUSH_KV.put(
     `token:${body.deviceToken}`,
     JSON.stringify({
-      email: user.email,
-      gatewayId: body.gatewayId,
+      email: verified.user.email,
+      gatewayId: verified.user.gatewayId ?? body.gatewayId,
       platform: body.platform,
       registeredAt: Date.now(),
     }),
@@ -236,17 +339,20 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
 
-  const user = await verifyApiKey(env, apiKey);
-  if (!user) {
+  const verified = await verifyApiKey(env, apiKey);
+  if (!verified) {
     console.log('[PushRelay] Invalid API key');
     return jsonResponse({ error: 'Invalid API key' }, 401);
   }
-  console.log(`[PushRelay] User: ${user.email}, Plan: ${user.plan}`);
+  const { user, storageKey } = verified;
+  console.log(`[PushRelay] User: ${user.email ?? user.gatewayId}, Plan: ${user.plan}`);
+
+  const identity = user.email || user.gatewayId || '';
 
   // Check push limit for free plan
   if (user.plan === 'free') {
     const today = new Date().toISOString().slice(0, 10);
-    const counterKey = `counter:${user.email}:${today}`;
+    const counterKey = `counter:${identity}:${today}`;
     const counterData = await env.PUSH_KV.get(counterKey, 'json');
     const count = counterData ? (counterData as { count: number }).count : 0;
 
@@ -262,12 +368,7 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
       }, 429);
     }
 
-    // Increment counter
-    console.log('[PushRelay] Incrementing counter...');
-    await env.PUSH_KV.put(counterKey, JSON.stringify({ count: count + 1 }), {
-      expirationTtl: 86400 * 2, // 2 days TTL
-    });
-    console.log('[PushRelay] Counter incremented');
+    // Defer counter increment until after successful APNs push
   }
 
   // Send push notification via APNs
@@ -275,7 +376,26 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
 
   if (result.ok) {
     user.pushCount++;
-    await env.PUSH_KV.put(`user:${user.email}`, JSON.stringify(user));
+    await env.PUSH_KV.put(storageKey, JSON.stringify(user));
+
+    // Increment daily counter only on success
+    if (user.plan === 'free') {
+      const today = new Date().toISOString().slice(0, 10);
+      const counterKey = `counter:${identity}:${today}`;
+      const counterData = await env.PUSH_KV.get(counterKey, 'json');
+      const count = counterData ? (counterData as { count: number }).count : 0;
+      await env.PUSH_KV.put(counterKey, JSON.stringify({ count: count + 1 }), {
+        expirationTtl: 86400 * 2,
+      });
+    }
+  } else {
+    // Clean up invalid device tokens
+    if (result.apnsStatus === 410) {
+      console.log('[PushRelay] Device token unregistered (410), removing from KV');
+      await env.PUSH_KV.delete(`token:${body.deviceToken}`);
+    } else if (result.apnsStatus === 400) {
+      console.error('[PushRelay] APNs rejected push (400 BadDeviceToken): %s', result.apnsBody);
+    }
   }
 
   return jsonResponse({
@@ -298,8 +418,8 @@ async function handleDeviceUnregister(request: Request, env: Env): Promise<Respo
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
 
-  const user = await verifyApiKey(env, apiKey);
-  if (!user) {
+  const verified = await verifyApiKey(env, apiKey);
+  if (!verified) {
     return jsonResponse({ error: 'Invalid API key' }, 401);
   }
 
@@ -316,20 +436,24 @@ async function handleUserInfo(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ error: 'Authorization required' }, 401);
   }
 
-  const user = await verifyApiKey(env, apiKey);
-  if (!user) {
+  const verified = await verifyApiKey(env, apiKey);
+  if (!verified) {
     return jsonResponse({ error: 'Invalid API key' }, 401);
   }
 
+  const { user } = verified;
+  const identity = user.email || user.gatewayId || '';
+
   // Get today's push count
   const today = new Date().toISOString().slice(0, 10);
-  const counterKey = `counter:${user.email}:${today}`;
+  const counterKey = `counter:${identity}:${today}`;
   const counterData = await env.PUSH_KV.get(counterKey, 'json');
   const todayCount = counterData ? (counterData as { count: number }).count : 0;
 
   return jsonResponse({
     ok: true,
     email: user.email,
+    gatewayId: user.gatewayId,
     plan: user.plan,
     pushCount: user.pushCount,
     pushLimit: user.pushLimit,
@@ -348,14 +472,19 @@ function extractApiKey(request: Request): string | null {
   return null;
 }
 
-async function verifyApiKey(env: Env, apiKey: string): Promise<UserRecord | null> {
-  const email = await env.PUSH_KV.get(`apikey:${apiKey}`);
-  if (!email) return null;
+async function verifyApiKey(env: Env, apiKey: string): Promise<{ user: UserRecord; storageKey: string } | null> {
+  let storageKey = await env.PUSH_KV.get(`apikey:${apiKey}`);
+  if (!storageKey) return null;
 
-  const userData = await env.PUSH_KV.get(`user:${email}`, 'json');
+  // Backward compat: old format stored plain email, new format stores full KV key
+  if (!storageKey.includes(':')) {
+    storageKey = `user:${storageKey}`;
+  }
+
+  const userData = await env.PUSH_KV.get(storageKey, 'json');
   if (!userData) return null;
 
-  return userData as UserRecord;
+  return { user: userData as UserRecord, storageKey };
 }
 
 function generateApiKey(): string {

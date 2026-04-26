@@ -5,12 +5,13 @@ import { homedir, platform } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
+import { createConnection } from "node:net";
 import { createServer } from "./gateway/server.js";
 import { getOrCreateKey, detectLanIP } from "./gateway/token-store.js";
 import { displayConnectionInfo } from "./gateway/qr-display.js";
 import { mergeHooksIntoSettings, buildHooksConfig } from "./gateway/hooks-config.js";
 import { loadLinksConfig, saveLinksConfig } from "./gateway/link-config.js";
-import { loadPushConfig, savePushConfig, deletePushConfig, generateGatewayId, registerAccount, getUserInfo } from "./gateway/push-config.js";
+import { loadPushConfig, savePushConfig, deletePushConfig, generateGatewayId, autoRegisterPush, getUserInfo, DEFAULT_RELAY_URL } from "./gateway/push-config.js";
 import { VALID_LINK_TYPES, type LinkType } from "../shared/protocol.js";
 
 export const PID_DIR = join(homedir(), ".mypilot");
@@ -70,6 +71,21 @@ function isProcessAlive(pid: number, expectedStartTime?: string): boolean {
   return actualStartTime === expectedStartTime;
 }
 
+function checkPortInUse(port: number): Promise<boolean> {
+  if (process.env.VITEST !== undefined) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const socket = createConnection({ port, timeout: 300 }, () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on("error", () => resolve(false));
+    socket.on("timeout", () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
 function printUsage(): void {
   console.log("Usage: mypilot <command>");
   console.log("");
@@ -89,7 +105,6 @@ function printUsage(): void {
   console.log("              link disable <id>");
   console.log("  push        Manage push notification config");
   console.log("              push status");
-  console.log("              push register <email> [--relay <url>]");
   console.log("              push setup <relay-url> <api-key>");
   console.log("              push disable");
 }
@@ -107,18 +122,49 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
 
   const lanIP = detectLanIP();
   const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
-  const pushConfig = loadPushConfig(pidDir);
+
+  let pushConfig = loadPushConfig(pidDir);
+  if (!pushConfig) {
+    const gatewayId = generateGatewayId(pidDir);
+    const result = await autoRegisterPush(DEFAULT_RELAY_URL, gatewayId);
+    if (result) {
+      pushConfig = { relayUrl: DEFAULT_RELAY_URL, apiKey: result.apiKey, gatewayId };
+      savePushConfig(pidDir, pushConfig);
+    } else {
+      console.log('Push auto-registration failed — push notifications will be unavailable');
+    }
+  }
 
   const server = createServer(DEFAULT_PORT, logDir, pidDir, key, pushConfig ?? undefined);
 
+  const portInUse = await checkPortInUse(DEFAULT_PORT);
+  if (portInUse) {
+    console.error(`Port ${DEFAULT_PORT} is already in use.`);
+    console.error(`Check for running instances: lsof -i :${DEFAULT_PORT}`);
+    console.error(`Stop existing gateway: mypilot stop`);
+    process.exit(1);
+  }
 
   writePidFile(pidPath, process.pid);
 
-  await server.start();
+  try {
+    await server.start();
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "EADDRINUSE") {
+      console.error(`Port ${DEFAULT_PORT} is already in use.`);
+      console.error(`Check for running instances: lsof -i :${DEFAULT_PORT}`);
+      console.error(`Stop existing gateway: mypilot stop`);
+    } else {
+      console.error(`Failed to start gateway: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try { unlinkSync(pidPath); } catch { /* ignore */ }
+    process.exit(1);
+  }
 
   console.log(`Gateway running at http://localhost:${DEFAULT_PORT}`);
   if (pushConfig) {
-    console.log(`Push notifications enabled (relay: ${pushConfig.relayUrl})`);
+    console.log(`Push notifications enabled (${pushConfig.relayUrl})`);
   }
   displayConnectionInfo(lanIP, DEFAULT_PORT, key, links);
 
@@ -450,7 +496,11 @@ async function handlePushCommand(pidDir: string, args: string[]): Promise<void> 
 
       const userInfo = await getUserInfo(config.relayUrl, config.apiKey);
       if (userInfo) {
-        console.log(`  Account: ${userInfo.email}`);
+        if (userInfo.email) {
+          console.log(`  Account: ${userInfo.email}`);
+        } else if (userInfo.gatewayId) {
+          console.log(`  Account: ${userInfo.gatewayId} (auto-registered)`);
+        }
         console.log(`  Plan: ${userInfo.plan}`);
         console.log(`  Today: ${userInfo.todayCount}/${userInfo.pushLimit} pushes`);
         console.log(`  Total: ${userInfo.pushCount} pushes`);
@@ -460,43 +510,9 @@ async function handlePushCommand(pidDir: string, args: string[]): Promise<void> 
       console.log('');
       console.log('Push notifications: disabled');
       console.log('');
-      console.log('To enable, run:');
-      console.log('  mypilot push register <email>');
+      console.log('Start the gateway to auto-register push notifications.');
       console.log('');
     }
-    return;
-  }
-
-  if (subCommand === 'register') {
-    const email = args[1];
-    const relayIdx = args.indexOf('--relay');
-    const relayUrl = relayIdx !== -1 && args[relayIdx + 1] ? args[relayIdx + 1] : 'https://push.mypilot.dev';
-
-    if (!email) {
-      console.error('Usage: mypilot push register <email> [--relay <url>]');
-      process.exit(1);
-    }
-
-    console.log(`Registering account: ${email}`);
-    console.log(`Relay URL: ${relayUrl}`);
-    console.log('');
-
-    const result = await registerAccount(relayUrl, email);
-    if (!result) {
-      console.error('Registration failed. Please check the relay URL and try again.');
-      process.exit(1);
-    }
-
-    const gatewayId = generateGatewayId(pidDir);
-    savePushConfig(pidDir, { relayUrl, apiKey: result.apiKey, gatewayId });
-
-    console.log('Registration successful!');
-    console.log(`  API Key: ${result.apiKey}`);
-    console.log(`  Plan: ${result.plan}`);
-    console.log(`  Push Limit: ${result.pushLimit}/day`);
-    console.log(`  Gateway ID: ${gatewayId}`);
-    console.log('');
-    console.log('Restart the gateway to apply changes.');
     return;
   }
 

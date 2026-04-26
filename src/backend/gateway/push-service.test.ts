@@ -1,15 +1,29 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PushService, type PushPayload } from './push-service.js';
 import type { HookEventName } from '../../shared/protocol.js';
+
+function makeResponse(overrides: Partial<Response> = {}): Partial<Response> {
+  return {
+    ok: true,
+    status: 200,
+    text: vi.fn().mockResolvedValue(''),
+    ...overrides,
+  };
+}
 
 describe('PushService', () => {
   let pushService: PushService;
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     pushService = new PushService('https://push.example.com', 'test-api-key', 'gateway-123');
-    fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    fetchMock = vi.fn().mockResolvedValue(makeResponse());
     vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('sendPush', () => {
@@ -46,7 +60,7 @@ describe('PushService', () => {
       expect(body.payload.tool_name).toBe('Bash');
     });
 
-    it('returns false on fetch error', async () => {
+    it('returns false on fetch error (after retries)', async () => {
       fetchMock.mockRejectedValue(new Error('Network error'));
 
       const payload: PushPayload = {
@@ -55,12 +69,34 @@ describe('PushService', () => {
         eventName: 'Stop',
       };
 
-      const result = await pushService.sendPush('device-token-123', payload);
+      const promise = pushService.sendPush('device-token-123', payload);
+      // Advance past all retry delays: 0ms delay + 1000ms + 2000ms + 4000ms
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await promise;
+
       expect(result).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     });
 
-    it('returns false when response is not ok', async () => {
-      fetchMock.mockResolvedValue({ ok: false, status: 400 });
+    it('returns false when response is not ok (after retries)', async () => {
+      fetchMock.mockResolvedValue(makeResponse({ ok: false, status: 500 }));
+
+      const payload: PushPayload = {
+        sessionId: 'session-1',
+        eventId: 'event-1',
+        eventName: 'Stop',
+      };
+
+      const promise = pushService.sendPush('device-token-123', payload);
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await promise;
+
+      expect(result).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it.each([429, 401])('does not retry on %i', async (status) => {
+      fetchMock.mockResolvedValue(makeResponse({ ok: false, status }));
 
       const payload: PushPayload = {
         sessionId: 'session-1',
@@ -69,7 +105,9 @@ describe('PushService', () => {
       };
 
       const result = await pushService.sendPush('device-token-123', payload);
+
       expect(result).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });
 

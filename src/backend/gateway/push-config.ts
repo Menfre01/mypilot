@@ -9,12 +9,15 @@ export interface PushConfigFile {
 }
 
 export interface PushUserInfo {
-  email: string;
+  email?: string;
+  gatewayId?: string;
   plan: 'free' | 'pro';
   pushCount: number;
   pushLimit: number;
   todayCount: number;
 }
+
+export const DEFAULT_RELAY_URL = 'https://mypilot-push-relay.menfre.workers.dev';
 
 const PUSH_CONFIG_FILE = 'push.json';
 
@@ -82,13 +85,13 @@ export interface RegisterResult {
   pushLimit: number;
 }
 
-export async function registerAccount(
+export async function autoRegisterPush(
   relayUrl: string,
-  email: string,
+  gatewayId: string,
 ): Promise<RegisterResult | null> {
   const data = await fetchJson<RegisterResult>(
-    `${relayUrl}/api/register`,
-    { body: { email } },
+    `${relayUrl}/api/auto-register`,
+    { body: { gatewayId } },
   );
   if (!data?.apiKey) return null;
   return data;

@@ -212,7 +212,8 @@ export function createServer(
         deviceStore.setConnected(deviceId, false);
       });
 
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
+        httpServer.on("error", reject);
         httpServer.listen(port, resolve);
       });
     },

@@ -210,6 +210,11 @@ export class HookHandler {
       console.log('[Push] device %s connected but stale (%dms inactive), sending push anyway', takeoverDevice.deviceId, inactiveMs);
     }
 
+    if (!this.pushService.isAvailable()) {
+      console.log('[Push] skip: push service unavailable');
+      return;
+    }
+
     const now = Date.now();
     if (now - this.lastPushAt < HookHandler.PUSH_THROTTLE_MS) {
       console.log('[Push] skip: throttled (last push %dms ago)', now - this.lastPushAt);

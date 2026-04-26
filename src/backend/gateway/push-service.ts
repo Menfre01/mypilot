@@ -15,6 +15,8 @@ export class PushService {
   private relayUrl: string;
   private apiKey: string;
   private gatewayId: string;
+  private quotaExceeded = false;
+  private quotaResetDate: string | null = null;
 
   constructor(relayUrl: string, apiKey: string, gatewayId: string) {
     this.relayUrl = relayUrl;
@@ -22,47 +24,112 @@ export class PushService {
     this.gatewayId = gatewayId;
   }
 
+  isAvailable(): boolean {
+    if (!this.quotaExceeded) return true;
+    const today = new Date().toISOString().slice(0, 10);
+    if (this.quotaResetDate !== today) {
+      this.quotaExceeded = false;
+      this.quotaResetDate = null;
+      return true;
+    }
+    return false;
+  }
+
   async sendPush(deviceToken: string, payload: PushPayload): Promise<boolean> {
     const { title, body } = buildNotification(payload);
 
-    try {
-      const category = categoryForEvent(payload.eventName);
-      console.log('[PushService] event=%s category=%s', payload.eventName, category ?? 'none');
-      const response = await fetch(`${this.relayUrl}/api/push`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          gatewayId: this.gatewayId,
-          deviceToken,
-          payload: {
-            aps: {
-              alert: { title, body },
-              sound: 'default',
-              badge: 1,
-              ...(category ? { category } : {}),
-            },
-            session_id: payload.sessionId,
-            event_id: payload.eventId,
-            event_name: payload.eventName,
-            tool_name: payload.toolName,
-          },
-        }),
-      });
+    const category = categoryForEvent(payload.eventName);
+    console.log('[PushService] event=%s category=%s', payload.eventName, category ?? 'none');
 
-      if (!response.ok) {
-        console.error(`[PushService] Push failed: ${response.status}`);
+    return this.sendWithRetry(deviceToken, title, body, category, payload);
+  }
+
+  private async sendWithRetry(
+    deviceToken: string,
+    title: string,
+    body: string,
+    category: string | null,
+    payload: PushPayload,
+  ): Promise<boolean> {
+    const maxRetries = 3;
+    const baseDelay = 1000;
+
+    // Body is identical for all retries; do not rebuild inside the loop.
+    const requestBody = JSON.stringify({
+      gatewayId: this.gatewayId,
+      deviceToken,
+      payload: {
+        aps: {
+          alert: { title, body },
+          sound: 'default',
+          badge: 1,
+          ...(category ? { category } : {}),
+        },
+        session_id: payload.sessionId,
+        event_id: payload.eventId,
+        event_name: payload.eventName,
+        tool_name: payload.toolName,
+      },
+    });
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (attempt > 0) {
+        const delay = baseDelay * Math.pow(2, attempt - 1);
+        console.log('[PushService] retry %d/%d in %dms', attempt, maxRetries - 1, delay);
+        await sleep(delay);
       }
 
-      return response.ok;
-    } catch (error) {
-      console.error('[PushService] Error sending push:', error);
-      return false;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15_000);
+
+      try {
+        const response = await fetch(`${this.relayUrl}/api/push`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: requestBody,
+          signal: controller.signal,
+        });
+
+        if (response.ok) return true;
+
+        if (response.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
+          this.quotaExceeded = true;
+          this.quotaResetDate = new Date().toISOString().slice(0, 10);
+          console.log('[PushService] Daily quota exceeded, disabling push for today');
+          return false;
+        }
+        if (response.status === HTTP_STATUS.UNAUTHORIZED) return false;
+
+        // Read only first 500 bytes to avoid memory pressure on large error pages
+        const relayBody = await readFirstBytes(response, 500).catch(() => '<read-error>');
+        console.error(
+          '[PushService] Push failed: HTTP %d body=%s',
+          response.status,
+          relayBody,
+        );
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (attempt < maxRetries - 1) {
+          console.error('[PushService] Push attempt failed (will retry): %s', msg);
+        } else {
+          console.error('[PushService] Push failed (no more retries): %s', msg);
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
     }
+
+    return false;
   }
 }
+
+const HTTP_STATUS = {
+  UNAUTHORIZED: 401,
+  TOO_MANY_REQUESTS: 429,
+} as const;
 
 const APNS_CATEGORY = {
   APPROVAL: 'APPROVAL',
@@ -117,4 +184,29 @@ function buildNotification(payload: PushPayload): { title: string; body: string 
 function truncateTail(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return text.slice(0, maxLen - 1) + '…';
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readFirstBytes(response: Response, maxBytes: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.length;
+    }
+    reader.cancel();
+  } catch {
+    // reader may already be cancelled
+  }
+  const decoder = new TextDecoder();
+  const text = chunks.map(c => decoder.decode(c, { stream: true })).join('');
+  return text.slice(0, maxBytes);
 }
