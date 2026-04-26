@@ -205,7 +205,7 @@ describe("runCli", () => {
       expect(output).toContain(`http://localhost:${DEFAULT_PORT}`);
     });
 
-    it("refuses to start if PID file exists and process is alive", async () => {
+    it("shows pairing info if PID file exists and process is alive", async () => {
       mkdirSync(testPidDir, { recursive: true });
       writeFileSync(testPidPath, String(process.pid), "utf-8");
 
@@ -214,10 +214,10 @@ describe("runCli", () => {
         expect.fail("should have thrown");
       } catch (e) {
         expect(e).toBeInstanceOf(ExitError);
-        expect((e as ExitError).code).toBe(1);
+        expect((e as ExitError).code).toBe(0);
       }
 
-      const output = consoleErrorSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
       expect(output).toMatch(/already running/i);
     });
 
@@ -433,7 +433,7 @@ describe("runCli", () => {
       expect(mockSpawnChild.unref).toHaveBeenCalled();
     });
 
-    it("refuses to start if already running", async () => {
+    it("shows pairing info if already running", async () => {
       mkdirSync(testPidDir, { recursive: true });
       writeFileSync(testPidPath, String(process.pid), "utf-8");
 
@@ -442,10 +442,10 @@ describe("runCli", () => {
         expect.fail("should have thrown");
       } catch (e) {
         expect(e).toBeInstanceOf(ExitError);
-        expect((e as ExitError).code).toBe(1);
+        expect((e as ExitError).code).toBe(0);
       }
 
-      const output = consoleErrorSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
       expect(output).toMatch(/already running/i);
     });
 

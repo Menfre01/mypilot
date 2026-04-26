@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import { createConnection } from "node:net";
+import { get } from "node:http";
 import { createServer } from "./gateway/server.js";
 import { getOrCreateKey, detectLanIP } from "./gateway/token-store.js";
 import { displayConnectionInfo } from "./gateway/qr-display.js";
@@ -86,6 +87,42 @@ function checkPortInUse(port: number): Promise<boolean> {
   });
 }
 
+function getOrCreateKeySafe(dir: string): Buffer | null {
+  try {
+    const key = readFileSync(join(dir, "key"));
+    if (key.length === 32) return key;
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function checkExistingGateway(port: number, key: Buffer): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = get(
+      `http://localhost:${port}/pair?key=${encodeURIComponent(key.toString("base64"))}`,
+      { timeout: 2000 },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => {
+          try {
+            const data = JSON.parse(body);
+            resolve(data.ok === true);
+          } catch {
+            resolve(false);
+          }
+        });
+      },
+    );
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
 function printUsage(): void {
   console.log("Usage: mypilot <command>");
   console.log("");
@@ -110,18 +147,32 @@ function printUsage(): void {
 }
 
 async function startGateway(pidDir: string, pidPath: string): Promise<void> {
-  const existingPid = readPidFile(pidPath);
-  if (existingPid !== null && isProcessAlive(existingPid.pid, existingPid.startTime)) {
-    console.error(`Gateway is already running (PID ${existingPid.pid})`);
-    process.exit(1);
-  }
-
   mkdirSync(pidDir, { recursive: true });
   const key = getOrCreateKey(pidDir);
-  const logDir = join(pidDir, "logs");
-
   const lanIP = detectLanIP();
   const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
+
+  const existingPid = readPidFile(pidPath);
+  if (existingPid !== null && isProcessAlive(existingPid.pid, existingPid.startTime)) {
+    console.log(`Gateway already running on port ${DEFAULT_PORT} (PID ${existingPid.pid})`);
+    displayConnectionInfo(lanIP, DEFAULT_PORT, key, links);
+    process.exit(0);
+  }
+
+  const logDir = join(pidDir, "logs");
+
+  const portInUse = await checkPortInUse(DEFAULT_PORT);
+  if (portInUse) {
+    const isExisting = await checkExistingGateway(DEFAULT_PORT, key);
+    if (isExisting) {
+      console.log(`Gateway already running on port ${DEFAULT_PORT}`);
+      displayConnectionInfo(lanIP, DEFAULT_PORT, key, links);
+      process.exit(0);
+    }
+    console.error(`Port ${DEFAULT_PORT} is already in use by another application.`);
+    console.error(`Check: lsof -i :${DEFAULT_PORT}`);
+    process.exit(1);
+  }
 
   let pushConfig = loadPushConfig(pidDir);
   if (!pushConfig) {
@@ -136,14 +187,6 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
   }
 
   const server = createServer(DEFAULT_PORT, logDir, pidDir, key, pushConfig ?? undefined);
-
-  const portInUse = await checkPortInUse(DEFAULT_PORT);
-  if (portInUse) {
-    console.error(`Port ${DEFAULT_PORT} is already in use.`);
-    console.error(`Check for running instances: lsof -i :${DEFAULT_PORT}`);
-    console.error(`Stop existing gateway: mypilot stop`);
-    process.exit(1);
-  }
 
   writePidFile(pidPath, process.pid);
 
@@ -190,13 +233,31 @@ function resolveSelfScriptPath(): string {
 }
 
 async function startBackground(pidDir: string, pidPath: string): Promise<void> {
+  mkdirSync(pidDir, { recursive: true });
+  const key = getOrCreateKey(pidDir);
+  const lanIP = detectLanIP();
+  const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
+
   const existingPid = readPidFile(pidPath);
   if (existingPid !== null && isProcessAlive(existingPid.pid, existingPid.startTime)) {
-    console.error(`Gateway is already running (PID ${existingPid.pid})`);
+    console.log(`Gateway already running on port ${DEFAULT_PORT} (PID ${existingPid.pid})`);
+    displayConnectionInfo(lanIP, DEFAULT_PORT, key, links);
+    process.exit(0);
+  }
+
+  const portInUse = await checkPortInUse(DEFAULT_PORT);
+  if (portInUse) {
+    const isExisting = await checkExistingGateway(DEFAULT_PORT, key);
+    if (isExisting) {
+      console.log(`Gateway already running on port ${DEFAULT_PORT}`);
+      displayConnectionInfo(lanIP, DEFAULT_PORT, key, links);
+      process.exit(0);
+    }
+    console.error(`Port ${DEFAULT_PORT} is already in use by another application.`);
+    console.error(`Check: lsof -i :${DEFAULT_PORT}`);
     process.exit(1);
   }
 
-  mkdirSync(pidDir, { recursive: true });
   const logDir = join(pidDir, "logs");
   mkdirSync(logDir, { recursive: true });
 
@@ -245,21 +306,28 @@ async function startBackground(pidDir: string, pidPath: string): Promise<void> {
   process.exit(1);
 }
 
-async function stopGateway(pidPath: string): Promise<void> {
+async function stopGateway(pidDir: string, pidPath: string): Promise<void> {
   const info = readPidFile(pidPath);
 
-  if (info === null) {
-    console.log("Gateway is not running");
-    return;
-  }
-
-  if (!isProcessAlive(info.pid, info.startTime)) {
-    try {
-      unlinkSync(pidPath);
-    } catch {
-      // ignore
+  if (info === null || !isProcessAlive(info.pid, info.startTime)) {
+    // PID file missing or stale — check port as fallback
+    const portInUse = await checkPortInUse(DEFAULT_PORT);
+    if (portInUse) {
+      const key = await getOrCreateKeySafe(pidDir);
+      if (key && await checkExistingGateway(DEFAULT_PORT, key)) {
+        console.log(`Gateway is running on port ${DEFAULT_PORT} but PID file is missing.`);
+        console.log(`Find the process: lsof -i :${DEFAULT_PORT}`);
+        console.log(`Then stop it manually: kill <PID>`);
+        process.exit(1);
+      }
     }
-    console.log("Gateway is not running (cleaned up stale PID file)");
+
+    if (info !== null) {
+      try { unlinkSync(pidPath); } catch { /* ignore */ }
+      console.log("Gateway is not running (cleaned up stale PID file)");
+    } else {
+      console.log("Gateway is not running");
+    }
     return;
   }
 
@@ -307,20 +375,29 @@ async function stopGateway(pidPath: string): Promise<void> {
   console.log("Gateway killed (did not respond to SIGTERM).");
 }
 
-async function checkStatus(pidPath: string): Promise<void> {
+async function checkStatus(pidDir: string, pidPath: string): Promise<void> {
   const info = readPidFile(pidPath);
 
-  if (info === null) {
-    console.log("Gateway is not running");
+  if (info !== null && isProcessAlive(info.pid, info.startTime)) {
+    console.log(`Gateway is running (PID ${info.pid}, port ${DEFAULT_PORT})`);
     return;
   }
 
-  if (!isProcessAlive(info.pid, info.startTime)) {
+  // PID file missing or stale — check port as fallback
+  const portInUse = await checkPortInUse(DEFAULT_PORT);
+  if (portInUse) {
+    const key = getOrCreateKeySafe(pidDir);
+    if (key && await checkExistingGateway(DEFAULT_PORT, key)) {
+      console.log(`Gateway is running on port ${DEFAULT_PORT} (PID file missing)`);
+      return;
+    }
+  }
+
+  if (info !== null) {
     console.log("Gateway is not running (stale PID file)");
-    return;
+  } else {
+    console.log("Gateway is not running");
   }
-
-  console.log(`Gateway is running (PID ${info.pid}, port ${DEFAULT_PORT})`);
 }
 
 async function showPairInfo(pidDir: string): Promise<void> {
@@ -565,17 +642,17 @@ export async function runCli(
       await startBackground(pidDir, pidPath);
       break;
     case "stop":
-      await stopGateway(pidPath);
+      await stopGateway(pidDir, pidPath);
       break;
     case "restart":
-      await stopGateway(pidPath);
+      await stopGateway(pidDir, pidPath);
       await startBackground(pidDir, pidPath);
       break;
     case "gateway":
       await startGateway(pidDir, pidPath);
       break;
     case "status":
-      await checkStatus(pidPath);
+      await checkStatus(pidDir, pidPath);
       break;
     case "pair-info":
       await showPairInfo(pidDir);
