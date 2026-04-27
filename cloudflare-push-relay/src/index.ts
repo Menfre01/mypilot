@@ -371,9 +371,23 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
     // Defer counter increment until after successful APNs push
   }
 
-  // Send push notification via APNs
-  const environment = body.environment ?? 'sandbox';
-  const result = await sendAPNsPush(env, body.deviceToken, body.payload, environment);
+  // Send push notification via APNs.
+  // If the reported environment fails with 400 (BadDeviceToken), try the
+  // other environment — the buggy app may misreport sandbox for production.
+  const reportedEnv = body.environment ?? 'sandbox';
+  let result = await sendAPNsPush(env, body.deviceToken, body.payload, reportedEnv);
+
+  if (!result.ok && result.apnsStatus === 400) {
+    const otherEnv = reportedEnv === 'sandbox' ? 'production' : 'sandbox';
+    console.log(`[PushRelay] First attempt (${reportedEnv}) failed with 400, trying ${otherEnv}...`);
+    const retry = await sendAPNsPush(env, body.deviceToken, body.payload, otherEnv);
+    if (retry.ok) {
+      console.log(`[PushRelay] Failover to ${otherEnv} succeeded — app misreported environment`);
+      result = retry;
+    } else {
+      console.log(`[PushRelay] Both environments failed: 400=${retry.apnsStatus} body=${retry.apnsBody}`);
+    }
+  }
 
   if (result.ok) {
     user.pushCount++;
