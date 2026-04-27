@@ -135,5 +135,7 @@ export interface EncryptedEnvelope {
 
 // ── Demo constants ──
 
-// Fixed 32-byte demo key base64-encoded
+// DEMO ONLY — provides NO real security. This fixed 32-byte key (0x00–0x1F)
+// is public and anyone can decrypt or forge demo gateway traffic. Never reuse
+// this key or the pattern of hardcoded keys for production data.
 export const DEMO_KEY_B64 = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';

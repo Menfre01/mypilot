@@ -4,14 +4,14 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-[Claude Code](https://code.claude.com) iOS 远程交互控制台 [MyPilot](https://apps.apple.com/app/mypilot) 的网关服务。
+[Claude Code](https://code.claude.com) 移动端远程交互控制台 [MyPilot](https://apps.apple.com/app/mypilot) 的网关服务。
 
 中文 | [English](README.en.md)
 </div>
 
-> **内测邀请** — MyPilot 目前正在 TestFlight 内测中。[加入内测](https://testflight.apple.com/join/gU2Tw8Hg)抢先体验。
+> **下载 MyPilot** — iOS 版已在 [App Store](https://apps.apple.com/app/mypilot) 海外各大区上架（中国大陆区暂不可用）。Android 版可在 [GitHub Releases](https://github.com/Menfre01/mypilot/releases) 下载 APK。
 
-MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你的 iPhone。在接管模式下，你可以直接在手机上审批权限、回答问题、提交 Prompt。
+MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你的手机。在接管模式下，你可以直接在手机上审批权限、回答问题、提交 Prompt。
 
 <p align="center">
 <img src="assets/iphone-welcome.png" width="220" alt="iPhone 上的欢迎页" />
@@ -24,7 +24,7 @@ MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你
 ## 环境要求
 
 - **Node.js** >= 20
-- **客户端**：[MyPilot iOS App](https://testflight.apple.com/join/gU2Tw8Hg)（TestFlight 内测）
+- **客户端**：[MyPilot iOS App](https://apps.apple.com/app/mypilot)（App Store 海外区）或 [Android APK](https://github.com/Menfre01/mypilot/releases/latest)
 - **Claude Code** CLI — [安装指南](https://docs.anthropic.com/en/docs/claude-code/overview#installing-claude-code)
 
 ## 快速开始
@@ -50,7 +50,7 @@ Claude Code ──(command hook / curl)──▶ 网关 (:16321) ──(AES-256-
                                         │  ├── GET  /pair         ← 密钥验证
                                         │  └── WS   /ws-gateway   ← 加密 WebSocket（多设备）
                                         │
-                                        └──▶ Push Relay ──(APNs)──▶ MyPilot App（推送通知）
+                                        └──▶ Push Relay ──(APNs)──▶ MyPilot App（iPhone / Apple Watch 推送通知）
 ```
 
 网关与 MyPilot 应用之间的所有 WebSocket 通信均使用 **AES-256-GCM** 端到端加密，密钥通过二维码分发。同一密钥同时用于连接认证和消息加密，无需单独的 Token。
@@ -59,7 +59,8 @@ Claude Code ──(command hook / curl)──▶ 网关 (:16321) ──(AES-256-
 
 - **端到端加密** — AES-256-GCM，每条消息使用独立的随机 12 字节 IV 和 16 字节认证标签；网关在没有密钥的情况下无法读取明文，任何篡改都会通过认证标签被检测
 - **密钥认证** — 客户端通过 WebSocket URL 中的预共享密钥进行身份验证
-- **多设备支持** — 可同时连接多台 iPhone/iPad；每台设备获得唯一的 `deviceId`，接收所有广播，并可独立发送命令；同设备重连会无缝替换旧连接
+- **多设备支持** — 可同时连接多台 iPhone/iPad/Android 设备；每台设备获得唯一的 `deviceId`，接收所有广播，并可独立发送命令；同设备重连会无缝替换旧连接
+- **Apple Watch 推送** — APNs 推送通知同步送达配对的 Apple Watch，无需额外配置；蜂窝版手表可在远离 iPhone 时独立接收
 - **心跳检测** — 30 秒间隔的 keep-alive ping 自动检测每台设备的失效连接
 - **事件持久化** — 所有事件以 JSONL 格式记录到 `~/.mypilot/logs/`
 - **断线恢复** — 客户端重连后可从上次收到的序列号继续接收，每台设备的离线消息缓冲区最多保存 200 条事件

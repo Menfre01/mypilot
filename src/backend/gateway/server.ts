@@ -184,7 +184,7 @@ export function createServer(
         deviceStore.register(deviceId, message.platform, message.locale);
         break;
       case 'register_push':
-        console.log('[Device] register_push id=%s token=%s... env=%s', deviceId, message.deviceToken.slice(0, 16), message.environment ?? 'undefined');
+        console.log('[Device] register_push id=%s token=%s*** env=%s', deviceId, message.deviceToken.slice(0, 8), message.environment ?? 'undefined');
         if (deviceStore.setPushToken(deviceId, message.deviceToken, message.environment)) {
           persistState();
         }

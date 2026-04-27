@@ -1,12 +1,17 @@
 name = "mypilot-push-relay"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
+# Set CLOUDFLARE_ACCOUNT_ID env var instead of hardcoding account_id:
+#   export CLOUDFLARE_ACCOUNT_ID="3ffbdf65f08af7a129505c6c4e4e16c8"
+# Or keep the line below for local development:
 account_id = "3ffbdf65f08af7a129505c6c4e4e16c8"
 
 [vars]
 ENVIRONMENT = "production"
 
 # KV namespace for storing device tokens
+# The KV namespace ID is an infrastructure identifier — API authentication is
+# still required for access. Rotate if this value is considered compromised.
 [[kv_namespaces]]
 binding = "PUSH_KV"
 id = "24e865cd76024b3f8c8188bbc3a75f48"

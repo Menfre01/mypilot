@@ -4,3 +4,19 @@ dist/
 logs/
 .claude/settings.local.json
 .wrangler/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Credentials and keys
+*.pem
+*.p8
+*.key
+*.cert
+credentials*
+id_rsa
+id_ed25519
+id_ecdsa
+.npmrc
