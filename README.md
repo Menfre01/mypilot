@@ -4,14 +4,16 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-[Claude Code](https://code.claude.com) 移动端远程交互控制台 [MyPilot](https://apps.apple.com/app/mypilot) 的网关服务。
+[Claude Code](https://code.claude.com) 移动端远程交互控制台 [MyPilot](https://apps.apple.com/hk/app/mypilot/id6762133874) 的网关服务。
 
 中文 | [English](README.en.md)
 </div>
 
-> **下载 MyPilot** — iOS 版已在 [App Store](https://apps.apple.com/app/mypilot) 海外各大区上架（中国大陆区暂不可用）。Android 版可在 [GitHub Releases](https://github.com/Menfre01/mypilot/releases) 下载 APK。
+> **下载 MyPilot** — iOS 版已在 [App Store](https://apps.apple.com/hk/app/mypilot/id6762133874) 海外各大区上架（中国大陆区暂不可用）。Android 版可在 [GitHub Releases](https://github.com/Menfre01/mypilot/releases) 下载 APK。
 
 MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你的手机。在接管模式下，你可以直接在手机上审批权限、回答问题、提交 Prompt。
+
+> **Apple Watch 推送** — 无需额外配置，APNs 推送通知自动镜像到配对的 Apple Watch。蜂窝版手表即使远离 iPhone 也能独立接收推送。手腕上的手表让你随时掌握 Claude Code 运行状态。
 
 <p align="center">
 <img src="assets/iphone-welcome.png" width="220" alt="iPhone 上的欢迎页" />
@@ -24,7 +26,7 @@ MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你
 ## 环境要求
 
 - **Node.js** >= 20
-- **客户端**：[MyPilot iOS App](https://apps.apple.com/app/mypilot)（App Store 海外区）或 [Android APK](https://github.com/Menfre01/mypilot/releases/latest)
+- **客户端**：[MyPilot iOS App](https://apps.apple.com/hk/app/mypilot/id6762133874)（App Store 海外区）或 [Android APK](https://github.com/Menfre01/mypilot/releases/latest)
 - **Claude Code** CLI — [安装指南](https://docs.anthropic.com/en/docs/claude-code/overview#installing-claude-code)
 
 ## 快速开始
@@ -55,6 +57,18 @@ Claude Code ──(command hook / curl)──▶ 网关 (:16321) ──(AES-256-
 
 网关与 MyPilot 应用之间的所有 WebSocket 通信均使用 **AES-256-GCM** 端到端加密，密钥通过二维码分发。同一密钥同时用于连接认证和消息加密，无需单独的 Token。
 
+### 推送通知
+
+当客户端断开 WebSocket 连接后，Gateway 将新事件转发至 Push Relay → APNs → 设备。
+
+**推送触发条件**：设备离线（WebSocket 未连接）且距上次在线不超过 24 小时，Gateway 自动推送。设备重新上线后，Gateway 停止推送，改为 WebSocket 实时传输。
+
+**Apple Watch 推送逻辑**：
+- iOS 注册 APNs push token 时，系统自动在配对的 Apple Watch 上启用通知镜像，无需单独为手表注册 token
+- APNs 推送通过系统级镜像机制同时送达 iPhone 和配对的手表
+- GPS 版手表通过蓝牙/Wi-Fi 从 iPhone 间接接收；蜂窝版手表在远离 iPhone 时通过内置 eSIM 独立接收 APNs
+- 用户在手表上可直接查看通知内容，实时掌握 Claude Code 运行状态，无需掏出手机
+
 ### 安全与可靠性
 
 - **端到端加密** — AES-256-GCM，每条消息使用独立的随机 12 字节 IV 和 16 字节认证标签；网关在没有密钥的情况下无法读取明文，任何篡改都会通过认证标签被检测
@@ -76,7 +90,7 @@ mypilot status                         # 查看网关状态（PID、端口）
 mypilot init-hooks                     # 配置 Claude Code Hooks（自动合并到 ~/.claude/settings.json）
 mypilot pair-info                      # 显示配对信息（IP + 二维码），用于重新连接
 mypilot link list                      # 列出所有通信连接
-mypilot link add <lan|tunnel> <url>    # 添加连接（LAN 直连或隧道）
+mypilot link add <lan|tunnel> <url> [--label <label>]  # 添加连接（LAN 直连或隧道）
 mypilot link remove <id>               # 移除连接
 mypilot link enable <id>               # 启用连接
 mypilot link disable <id>              # 禁用连接
@@ -268,6 +282,7 @@ npm run docker:restart   # 重新构建并重启
 ├── gateway.pid      # 后台模式的 PID 文件
 ├── push.json        # 推送通知配置
 ├── links.json       # 通信链接配置
+├── gateway-state.json  # 网关状态（模式、接管权、设备）
 └── logs/
     └── events-YYYY-MM-DD.jsonl   # 按天存储的事件日志
 ```

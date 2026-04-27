@@ -4,7 +4,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-Gateway server for [MyPilot](https://apps.apple.com/app/mypilot) — the mobile remote interaction console for Claude Code.
+Gateway server for [MyPilot](https://apps.apple.com/hk/app/mypilot/id6762133874) — the mobile remote interaction console for Claude Code.
 
 [中文](README.md) | English
 </div>
@@ -12,6 +12,8 @@ Gateway server for [MyPilot](https://apps.apple.com/app/mypilot) — the mobile 
 > **Download MyPilot** — iOS: [App Store](https://apps.apple.com/app/mypilot) in most regions (not available in mainland China). Android: [GitHub Releases](https://github.com/Menfre01/mypilot/releases) APK.
 
 MyPilot receives Claude Code hook events and streams them to your phone via WebSocket. In takeover mode, you can approve/deny permissions, answer questions, and submit prompts from your phone.
+
+> **Apple Watch push** — APNs notifications are automatically mirrored to your paired Apple Watch with zero configuration. Cellular models receive push independently when away from iPhone. Stay on top of Claude Code activity right from your wrist.
 
 <p align="center">
 <img src="assets/iphone-sessions.png" width="220" alt="Session list on iPhone" />
@@ -55,6 +57,18 @@ Claude Code ──(command hook / curl)──▶ Gateway (:16321) ──(AES-256
 
 All WebSocket communication between the Gateway and the MyPilot app is end-to-end encrypted with **AES-256-GCM** using a pre-shared key distributed via QR code. The same key is used for both connection authentication and message encryption — no separate token is needed.
 
+### Push Notifications
+
+When a client disconnects from WebSocket, the Gateway forwards new events via Push Relay → APNs → device.
+
+**Trigger**: push is sent automatically when a device is offline (no WebSocket connection) and was last seen within 24 hours. Once the device reconnects, Gateway stops pushing and resumes real-time WebSocket delivery.
+
+**Apple Watch behavior**:
+- When iOS registers an APNs push token, notification mirroring is automatically enabled on the paired Apple Watch — no separate token registration needed
+- APNs delivers notifications to both iPhone and the paired watch via system-level mirroring
+- GPS-only watches receive notifications via Bluetooth/Wi-Fi from the paired iPhone; cellular watches receive directly via built-in eSIM when away from iPhone
+- Notifications are readable directly on the watch, keeping you aware of Claude Code activity without reaching for your phone
+
 ### Security & Reliability
 
 - **End-to-end encryption** — AES-256-GCM with a unique random 12-byte IV per message and 16-byte authentication tag; the gateway cannot read plaintext without the key, and any tampering is detected via the auth tag
@@ -76,7 +90,7 @@ mypilot status                         # Check Gateway status (PID, port)
 mypilot init-hooks                     # Configure Claude Code hooks (auto-merge into ~/.claude/settings.json)
 mypilot pair-info                      # Show pairing info (IP + QR code) for reconnecting
 mypilot link list                      # List all communication links
-mypilot link add <lan|tunnel> <url>    # Add a link (LAN direct or tunnel)
+mypilot link add <lan|tunnel> <url> [--label <label>]  # Add a link (LAN direct or tunnel)
 mypilot link remove <id>               # Remove a link
 mypilot link enable <id>               # Enable a link
 mypilot link disable <id>              # Disable a link
@@ -268,6 +282,7 @@ npm run docker:restart   # Rebuild & restart
 ├── gateway.pid      # PID file for background mode
 ├── push.json        # Push notification config
 ├── links.json       # Communication links config
+├── gateway-state.json  # Gateway state (mode, takeover ownership, devices)
 └── logs/
     └── events-YYYY-MM-DD.jsonl   # Daily event logs
 ```
