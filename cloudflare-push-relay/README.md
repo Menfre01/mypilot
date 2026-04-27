@@ -4,10 +4,10 @@ Cloudflare Workers service for relaying APNs push notifications.
 
 ## Overview
 
-This service acts as a relay between MyPilot Gateway and Apple Push Notification Service (APNs). It allows iOS devices to receive push notifications when they are disconnected from the Gateway.
+This service acts as a relay between MyPilot Gateway and Apple Push Notification Service (APNs). It allows iOS devices (iPhone and Apple Watch) to receive push notifications when they are disconnected from the Gateway.
 
 ```
-Gateway → Push Relay → APNs → iOS Device
+Gateway → Push Relay → APNs → iPhone / Apple Watch
 ```
 
 ## Plans

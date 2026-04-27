@@ -4,14 +4,14 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-Gateway server for [MyPilot](https://apps.apple.com/app/mypilot) — the iOS remote interaction console for Claude Code.
+Gateway server for [MyPilot](https://apps.apple.com/app/mypilot) — the mobile remote interaction console for Claude Code.
 
 [中文](README.md) | English
 </div>
 
-> **Download MyPilot** — Available on the [App Store](https://apps.apple.com/app/mypilot) in most regions (not available in mainland China).
+> **Download MyPilot** — iOS: [App Store](https://apps.apple.com/app/mypilot) in most regions (not available in mainland China). Android: [GitHub Releases](https://github.com/Menfre01/mypilot/releases) APK.
 
-MyPilot receives Claude Code hook events and streams them to your iPhone via WebSocket. In takeover mode, you can approve/deny permissions, answer questions, and submit prompts from your phone.
+MyPilot receives Claude Code hook events and streams them to your phone via WebSocket. In takeover mode, you can approve/deny permissions, answer questions, and submit prompts from your phone.
 
 <p align="center">
 <img src="assets/iphone-sessions.png" width="220" alt="Session list on iPhone" />
@@ -24,7 +24,7 @@ MyPilot receives Claude Code hook events and streams them to your iPhone via Web
 ## Requirements
 
 - **Node.js** >= 20
-- **Client**: [MyPilot iOS App](https://apps.apple.com/app/mypilot) (App Store, most regions)
+- **Client**: [MyPilot iOS App](https://apps.apple.com/app/mypilot) (App Store, most regions) or [Android APK](https://github.com/Menfre01/mypilot/releases/latest)
 - **Claude Code** CLI — [Installation guide](https://docs.anthropic.com/en/docs/claude-code/overview#installing-claude-code)
 
 ## Quick Start
@@ -50,7 +50,7 @@ Claude Code ──(command hook / curl)──▶ Gateway (:16321) ──(AES-256
                                         │  ├── GET  /pair         ← key validation
                                         │  └── WS   /ws-gateway   ← encrypted WebSocket (multi-device)
                                         │
-                                        └──▶ Push Relay ──(APNs)──▶ MyPilot App (push notifications)
+                                        └──▶ Push Relay ──(APNs)──▶ MyPilot App (iPhone / Apple Watch push)
 ```
 
 All WebSocket communication between the Gateway and the MyPilot app is end-to-end encrypted with **AES-256-GCM** using a pre-shared key distributed via QR code. The same key is used for both connection authentication and message encryption — no separate token is needed.
@@ -59,7 +59,8 @@ All WebSocket communication between the Gateway and the MyPilot app is end-to-en
 
 - **End-to-end encryption** — AES-256-GCM with a unique random 12-byte IV per message and 16-byte authentication tag; the gateway cannot read plaintext without the key, and any tampering is detected via the auth tag
 - **Key-based authentication** — clients authenticate via the pre-shared key in the WebSocket URL
-- **Multi-device support** — connect multiple iPhones/iPads simultaneously; each device gets a unique `deviceId`, receives all broadcasts, and can send commands independently; same-device reconnection seamlessly replaces the old connection
+- **Multi-device support** — connect multiple iPhones/iPads/Android devices simultaneously; each device gets a unique `deviceId`, receives all broadcasts, and can send commands independently; same-device reconnection seamlessly replaces the old connection
+- **Apple Watch push** — APNs notifications are delivered to paired Apple Watch automatically with no extra setup; cellular models can receive notifications independently when away from iPhone
 - **Heartbeat** — 30-second keep-alive pings detect stale connections per device
 - **Event persistence** — all events are logged to JSONL files (`~/.mypilot/logs/`)
 - **Reconnection recovery** — clients can resume from the last received sequence number after reconnecting, with a per-device offline message buffer of up to 200 events
