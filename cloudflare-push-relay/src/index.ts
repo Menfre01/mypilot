@@ -331,7 +331,7 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ error: 'Invalid JSON' }, 400);
   }
 
-  console.log(`[PushRelay] Device token: ${body.deviceToken?.substring(0, 16)}...`);
+  console.log(`[PushRelay] Device token: ${body.deviceToken?.substring(0, 8)}***`);
   console.log(`[PushRelay] Payload: ${JSON.stringify(body.payload?.aps?.alert)}`);
 
   if (!body.deviceToken || !body.payload) {

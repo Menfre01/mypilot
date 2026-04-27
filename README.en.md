@@ -9,7 +9,7 @@ Gateway server for [MyPilot](https://apps.apple.com/app/mypilot) — the iOS rem
 [中文](README.md) | English
 </div>
 
-> **Download MyPilot** — Available on the [App Store](https://apps.apple.com/app/mypilot) (requires a non-China Apple ID).
+> **Download MyPilot** — Available on the [App Store](https://apps.apple.com/app/mypilot) in most regions (not available in mainland China).
 
 MyPilot receives Claude Code hook events and streams them to your iPhone via WebSocket. In takeover mode, you can approve/deny permissions, answer questions, and submit prompts from your phone.
 
@@ -24,7 +24,7 @@ MyPilot receives Claude Code hook events and streams them to your iPhone via Web
 ## Requirements
 
 - **Node.js** >= 20
-- **Client**: [MyPilot iOS App](https://apps.apple.com/app/mypilot) (App Store, non-China regions)
+- **Client**: [MyPilot iOS App](https://apps.apple.com/app/mypilot) (App Store, most regions)
 - **Claude Code** CLI — [Installation guide](https://docs.anthropic.com/en/docs/claude-code/overview#installing-claude-code)
 
 ## Quick Start

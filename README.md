@@ -9,7 +9,7 @@
 中文 | [English](README.en.md)
 </div>
 
-> **下载 MyPilot** — [App Store](https://apps.apple.com/app/mypilot) 可下载（暂不支持中国大陆区，需使用海外 Apple ID）。
+> **下载 MyPilot** — 已在 [App Store](https://apps.apple.com/app/mypilot) 海外各大区上架（中国大陆区暂不可用）。
 
 MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你的 iPhone。在接管模式下，你可以直接在手机上审批权限、回答问题、提交 Prompt。
 
@@ -24,7 +24,7 @@ MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你
 ## 环境要求
 
 - **Node.js** >= 20
-- **客户端**：[MyPilot iOS App](https://apps.apple.com/app/mypilot)（App Store，非中国大陆区）
+- **客户端**：[MyPilot iOS App](https://apps.apple.com/app/mypilot)（App Store 海外区）
 - **Claude Code** CLI — [安装指南](https://docs.anthropic.com/en/docs/claude-code/overview#installing-claude-code)
 
 ## 快速开始
