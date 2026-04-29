@@ -15,7 +15,6 @@ export const BLOCKING_HOOK_EVENTS: readonly HookEventName[] = [
   'UserPromptSubmit',
   'Elicitation',
   'Stop',
-  'SubagentStop',
 ];
 
 /** Hook events that are informational (no timeout). */
@@ -27,6 +26,7 @@ export const INFO_HOOK_EVENTS: readonly HookEventName[] = [
   'InstructionsLoaded',
   'Notification',
   'SubagentStart',
+  'SubagentStop',
   'StopFailure',
   'PermissionDenied',
   'ConfigChange',

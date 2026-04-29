@@ -38,6 +38,23 @@ export interface SessionInfo {
   displayName?: string;
 }
 
+// ── LLM feedback extracted from transcript ──
+
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
+export interface ModelFeedback {
+  model: string;
+  usage: TokenUsage;
+  text?: string;
+  thinking?: string;
+  tool_result?: string;
+}
+
 // ── Hook event ──
 
 export interface SSEHookEvent {
@@ -45,6 +62,7 @@ export interface SSEHookEvent {
   event_name: string;
   event_id: string;
   tool_name?: string;
+  model_feedback?: ModelFeedback;
   [key: string]: unknown;
 }
 
@@ -69,7 +87,7 @@ export type GatewayMode = 'bystander' | 'takeover';
 
 // ── Protocol version ──
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 // ── Gateway → Client messages ──
 
@@ -78,6 +96,7 @@ export type GatewayMessage =
   | GatewaySessionStart
   | GatewaySessionEnd
   | GatewayEvent
+  | GatewayEventEnrichment
   | GatewayModeChanged;
 
 export interface GatewayConnected {
@@ -104,6 +123,14 @@ export interface GatewayEvent {
   type: 'event';
   sessionId: string;
   event: SSEHookEvent;
+}
+
+export interface GatewayEventEnrichment {
+  type: 'event_enrichment';
+  sessionId: string;
+  eventId: string;
+  model_feedback: ModelFeedback;
+  tool_use_id?: string;
 }
 
 export interface GatewayModeChanged {

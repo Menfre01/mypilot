@@ -1,7 +1,7 @@
 // ── Protocol version ──
 
 /** Current protocol version. MAJOR bump = breaking changes (reject old clients). */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 // ── Pairing ──
 
@@ -79,10 +79,31 @@ export interface SessionInfo {
   startedAt: number;
 }
 
+// ── LLM feedback extracted from transcript ──
+
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
+export interface ModelFeedback {
+  model: string;
+  usage: TokenUsage;
+  /** 截断到 500 字符，assistant 消息中的 text 内容 */
+  text?: string;
+  /** 截断到 300 字符，assistant 消息中的 thinking 内容 */
+  thinking?: string;
+  /** 截断到 1000 字符，工具执行结果（仅 PostToolUse 等事件有） */
+  tool_result?: string;
+}
+
 // ── Hook event payload ──
 
 export interface SSEHookEvent {
   session_id: string;
+  model_feedback?: ModelFeedback;
   [key: string]: unknown;
 }
 
@@ -119,6 +140,7 @@ export type GatewayMessage =
   | { type: 'session_start'; session: SessionInfo }
   | { type: 'session_end'; sessionId: string }
   | { type: 'event'; sessionId: string; event: SSEHookEvent }
+  | { type: 'event_enrichment'; sessionId: string; eventId: string; model_feedback: ModelFeedback; tool_use_id?: string }
   | { type: 'mode_changed'; mode: GatewayMode; takeoverOwner?: string };
 
 // ── WebSocket protocol: Frontend -> Gateway ──

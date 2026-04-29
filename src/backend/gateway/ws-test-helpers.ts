@@ -70,6 +70,11 @@ export function decRaw(key: Buffer, raw: string): string {
   return decrypt(key, JSON.parse(raw));
 }
 
+/** Serialize an object as a JSONL line. */
+export function makeTranscriptLine(obj: Record<string, unknown>): string {
+  return JSON.stringify(obj) + '\n';
+}
+
 /** Build WebSocket URL with properly URL-encoded key. */
 export function wsUrl(port: number, key: string, extra?: Record<string, string>): string {
   const params = new URLSearchParams({ key, ...extra });

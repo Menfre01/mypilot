@@ -1,11 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { HookHandler } from './hook-handler.js';
 import { SessionStore } from './session-store.js';
 import { PendingStore } from './pending-store.js';
 import { DeviceStore } from './device-store.js';
 import { WsBus } from './ws-bus.js';
-import type { GatewayMessage } from '../../shared/protocol.js';
+import type { GatewayMessage, ModelFeedback } from '../../shared/protocol.js';
+import { makeTranscriptLine } from './ws-test-helpers.js';
 
 // ── Helpers ──
 
@@ -427,5 +431,289 @@ describe('HookHandler', () => {
     for (let i = 1; i < seqs.length; i++) {
       expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
     }
+  });
+
+  // ── Transcript enrichment ──
+
+  it('broadcasts event without model_feedback when transcript_path points to non-existent file', async () => {
+    const broadcasts = captureBroadcasts(wsBus);
+    const transcriptPath = '/fake/transcript.jsonl';
+
+    await handler.handleEvent(
+      makeEvent('PreToolUse', 's1', {
+        transcript_path: transcriptPath,
+        tool_use_id: 'call_test123',
+      }),
+    );
+
+    // Event should be broadcast immediately without model_feedback (enrichment is async)
+    const eventMsg = broadcasts.find((m) => m.type === 'event')!;
+    const evt = (eventMsg as { type: 'event'; event: Record<string, unknown> }).event;
+    expect(evt.event_name).toBe('PreToolUse');
+    expect(evt.transcript_path).toBe(transcriptPath);
+    expect(evt.model_feedback).toBeUndefined();
+  });
+
+  it('event without transcript_path has no model_feedback', async () => {
+    const broadcasts = captureBroadcasts(wsBus);
+
+    await handler.handleEvent(makeEvent('SessionStart', 's1'));
+
+    const eventMsg = broadcasts.find((m) => m.type === 'event')!;
+    const evt = (eventMsg as { type: 'event'; event: Record<string, unknown> }).event;
+    expect(evt.model_feedback).toBeUndefined();
+  });
+
+  it('event with transcript_path but non-existent file still broadcasts successfully', async () => {
+    const broadcasts = captureBroadcasts(wsBus);
+
+    await handler.handleEvent(
+      makeEvent('PostToolUse', 's1', {
+        transcript_path: '/nonexistent/path.jsonl',
+        tool_use_id: 'call_doesnotexist',
+      }),
+    );
+
+    // Event should still be broadcast even though transcript reading failed
+    const eventMsg = broadcasts.find((m) => m.type === 'event')!;
+    expect(eventMsg).toBeDefined();
+    const evt = (eventMsg as { type: 'event'; event: Record<string, unknown> }).event;
+    expect(evt.event_name).toBe('PostToolUse');
+    expect(evt.model_feedback).toBeUndefined();
+  });
+
+  it('event without tool_use_id skips enrichment even with transcript_path', async () => {
+    const broadcasts = captureBroadcasts(wsBus);
+
+    await handler.handleEvent(
+      makeEvent('UserPromptSubmit', 's1', {
+        transcript_path: '/fake/transcript.jsonl',
+        prompt: 'hello',
+      }),
+    );
+
+    const eventMsg = broadcasts.find((m) => m.type === 'event')!;
+    const evt = (eventMsg as { type: 'event'; event: Record<string, unknown> }).event;
+    expect(evt.model_feedback).toBeUndefined();
+    expect(evt.prompt).toBe('hello');
+  });
+
+  // ── Async enrichment ──
+
+  describe('async enrichment', () => {
+    let tempDir: string;
+    let transcriptPath: string;
+
+    const toolUseId = 'call_enrich_test';
+
+    function setupTranscript(): string {
+      tempDir = mkdtempSync(join(tmpdir(), 'mypilot-hh-test-'));
+      transcriptPath = join(tempDir, 'transcript.jsonl');
+
+      const lines = [
+        makeTranscriptLine({
+          type: 'assistant',
+          message: {
+            model: 'claude-opus-4-7',
+            usage: { input_tokens: 1000, output_tokens: 200 },
+            content: [
+              { type: 'thinking', thinking: 'I should read the file first' },
+              { type: 'text', text: 'Let me check the configuration.' },
+              { type: 'tool_use', id: toolUseId, name: 'Read', input: {} },
+            ],
+          },
+        }),
+        makeTranscriptLine({
+          type: 'user',
+          message: {
+            content: [
+              { type: 'tool_result', tool_use_id: toolUseId, content: '{"port": 8080}', isError: false },
+            ],
+          },
+        }),
+      ];
+
+      writeFileSync(transcriptPath, lines.join(''), 'utf-8');
+      return transcriptPath;
+    }
+
+    afterEach(() => {
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+    });
+
+    it('sends event_enrichment for PreToolUse with thinking and text', async () => {
+      const path = setupTranscript();
+      const broadcasts = captureBroadcasts(wsBus);
+
+      const promise = handler.handleEvent(
+        makeEvent('PreToolUse', 's1', {
+          transcript_path: path,
+          tool_use_id: toolUseId,
+          tool_name: 'Read',
+        }),
+      );
+
+      // handleEvent returns immediately (sync path for bystander PreToolUse)
+      const result = await promise;
+      expect(result).toEqual({});
+
+      // Event was broadcast without model_feedback
+      const eventMsg = broadcasts.find((m) => m.type === 'event')!;
+      expect(eventMsg).toBeDefined();
+      const evt = (eventMsg as { type: 'event'; event: Record<string, unknown> }).event;
+      expect(evt.model_feedback).toBeUndefined();
+
+      // Wait for async enrichment to complete (it's fire-and-forget)
+      await vi.waitFor(() => {
+        const enrichment = broadcasts.find((m) => m.type === 'event_enrichment');
+        expect(enrichment).toBeDefined();
+      }, { timeout: 2000, interval: 50 });
+
+      const enrichment = broadcasts.find((m) => m.type === 'event_enrichment')!;
+      const mf = (enrichment as { type: 'event_enrichment'; model_feedback: ModelFeedback }).model_feedback;
+      expect(mf.model).toBe('claude-opus-4-7');
+      expect(mf.thinking).toBe('I should read the file first');
+      expect(mf.text).toBe('Let me check the configuration.');
+      expect(mf.usage).toBeDefined();
+    });
+
+    it('sends event_enrichment for PostToolUse with tool_result only', async () => {
+      const path = setupTranscript();
+      const broadcasts = captureBroadcasts(wsBus);
+
+      const promise = handler.handleEvent(
+        makeEvent('PostToolUse', 's1', {
+          transcript_path: path,
+          tool_use_id: toolUseId,
+          tool_name: 'Read',
+        }),
+      );
+
+      await promise;
+
+      await vi.waitFor(() => {
+        const enrichment = broadcasts.find((m) => m.type === 'event_enrichment');
+        expect(enrichment).toBeDefined();
+      }, { timeout: 2000, interval: 50 });
+
+      const enrichment = broadcasts.find((m) => m.type === 'event_enrichment')!;
+      const mf = (enrichment as { type: 'event_enrichment'; model_feedback: ModelFeedback }).model_feedback;
+      expect(mf.model).toBe('claude-opus-4-7');
+      expect(mf.tool_result).toBe('{"port": 8080}');
+      // PostToolUse strips thinking and text
+      expect(mf.thinking).toBeUndefined();
+      expect(mf.text).toBeUndefined();
+    });
+
+    it('does not send event_enrichment when transcript has no matching entry', async () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'mypilot-hh-test-'));
+      transcriptPath = join(tempDir, 'transcript.jsonl');
+      // Write a transcript without the tool_use we reference
+      writeFileSync(transcriptPath, makeTranscriptLine({
+        type: 'assistant',
+        message: {
+          model: 'old-model',
+          usage: {},
+          content: [{ type: 'tool_use', id: 'some_other_call', name: 'Bash', input: {} }],
+        },
+      }), 'utf-8');
+
+      const broadcasts = captureBroadcasts(wsBus);
+
+      await handler.handleEvent(
+        makeEvent('PreToolUse', 's1', {
+          transcript_path: transcriptPath,
+          tool_use_id: 'non_matching_call',
+          tool_name: 'Bash',
+        }),
+      );
+
+      // Give async enrichment time to fail
+      await new Promise((r) => setTimeout(r, 600));
+
+      // Only the event broadcast, no event_enrichment
+      const enrichmentMsgs = broadcasts.filter((m) => m.type === 'event_enrichment');
+      expect(enrichmentMsgs).toHaveLength(0);
+    });
+
+    it('enrichment updates event in history for reconnecting clients', async () => {
+      const path = setupTranscript();
+      const broadcasts = captureBroadcasts(wsBus);
+
+      await handler.handleEvent(
+        makeEvent('PreToolUse', 's1', {
+          transcript_path: path,
+          tool_use_id: toolUseId,
+          tool_name: 'Read',
+        }),
+      );
+
+      await vi.waitFor(() => {
+        const enrichment = broadcasts.find((m) => m.type === 'event_enrichment');
+        expect(enrichment).toBeDefined();
+      }, { timeout: 2000, interval: 50 });
+
+      // History now includes model_feedback
+      const history = handler.getEventHistory();
+      const enrichedEvent = history.find(
+        (e) => e.event.event_id !== undefined && e.sessionId === 's1',
+      );
+      expect(enrichedEvent).toBeDefined();
+      expect(enrichedEvent!.event.model_feedback).toBeDefined();
+      expect(enrichedEvent!.event.model_feedback!.model).toBe('claude-opus-4-7');
+    });
+
+    it('gracefully handles enrichment errors without affecting event delivery', async () => {
+      // Use a path that will cause extractModelFeedback to throw (directory as file)
+      tempDir = mkdtempSync(join(tmpdir(), 'mypilot-hh-test-'));
+      const path = join(tempDir, 'transcript.jsonl');
+      // Create a directory with the same name to cause a read error
+      mkdirSync(path);
+
+      const broadcasts = captureBroadcasts(wsBus);
+
+      const result = await handler.handleEvent(
+        makeEvent('PreToolUse', 's1', {
+          transcript_path: path,
+          tool_use_id: 'call_whatever',
+          tool_name: 'Bash',
+        }),
+      );
+
+      // Event was still broadcast
+      expect(result).toEqual({});
+      const eventMsg = broadcasts.find((m) => m.type === 'event');
+      expect(eventMsg).toBeDefined();
+
+      // Give async enrichment time to try and fail
+      await new Promise((r) => setTimeout(r, 600));
+
+      // No enrichment message sent
+      const enrichmentMsgs = broadcasts.filter((m) => m.type === 'event_enrichment');
+      expect(enrichmentMsgs).toHaveLength(0);
+    });
+  });
+
+  it('adds timestamp to every event', async () => {
+    const broadcasts = captureBroadcasts(wsBus);
+
+    await handler.handleEvent(makeEvent('SessionStart', 's1'));
+
+    const eventMsg = broadcasts.find((m) => m.type === 'event')!;
+    const evt = (eventMsg as { type: 'event'; event: Record<string, unknown> }).event;
+    expect(evt.timestamp).toBeTypeOf('number');
+    expect(evt.timestamp).toBeGreaterThan(0);
+  });
+
+  it('timestamp is monotonically increasing', async () => {
+    const broadcasts = captureBroadcasts(wsBus);
+
+    await handler.handleEvent(makeEvent('PreToolUse', 's1'));
+    await handler.handleEvent(makeEvent('PostToolUse', 's1'));
+
+    const eventMsgs = broadcasts.filter(m => m.type === 'event');
+    const t1 = (eventMsgs[0].event as Record<string, unknown>).timestamp as number;
+    const t2 = (eventMsgs[1].event as Record<string, unknown>).timestamp as number;
+    expect(t2).toBeGreaterThanOrEqual(t1);
   });
 });
