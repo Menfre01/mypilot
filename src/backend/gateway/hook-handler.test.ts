@@ -8,8 +8,10 @@ import { SessionStore } from './session-store.js';
 import { PendingStore } from './pending-store.js';
 import { DeviceStore } from './device-store.js';
 import { WsBus } from './ws-bus.js';
-import type { GatewayMessage, ModelFeedback } from '../../shared/protocol.js';
+import type { GatewayMessage } from '../../shared/protocol.js';
 import { makeTranscriptLine } from './ws-test-helpers.js';
+import { EventLogger } from './event-logger.js';
+import { SessionStreamManager } from './session-stream-manager.js';
 
 // ── Helpers ──
 
@@ -35,13 +37,28 @@ describe('HookHandler', () => {
   let deviceStore: DeviceStore;
   let wsBus: WsBus;
   let handler: HookHandler;
+  let logDir: string;
+  let eventLogger: EventLogger;
+  let streamManager: SessionStreamManager;
 
   beforeEach(() => {
     sessionStore = new SessionStore();
     pendingStore = new PendingStore();
     deviceStore = new DeviceStore();
     wsBus = new WsBus(randomBytes(32));
+    logDir = mkdtempSync(join(tmpdir(), 'mypilot-hh-log-'));
+    eventLogger = new EventLogger(logDir);
+    streamManager = new SessionStreamManager(eventLogger, wsBus, {
+      pipelineCapacity: 20,
+      pipelineHighWatermark: 15,
+      pipelineLowWatermark: 5,
+    });
     handler = new HookHandler(sessionStore, pendingStore, deviceStore, wsBus);
+    handler.setStreamManager(streamManager);
+  });
+
+  afterEach(() => {
+    if (logDir) rmSync(logDir, { recursive: true, force: true });
   });
 
   // ── Mode management ──
@@ -85,17 +102,15 @@ describe('HookHandler', () => {
     expect(result).toEqual({});
   });
 
-  it('bystander mode still broadcasts events to frontend', async () => {
-    const broadcasts = captureBroadcasts(wsBus);
-
+  it('bystander mode 事件推送到管道', async () => {
     await handler.handleEvent(makeEvent('PreToolUse', 's1', { tool_name: 'Bash' }));
 
-    expect(broadcasts.length).toBeGreaterThanOrEqual(1);
-    const eventMsg = broadcasts.find((m) => m.type === 'event');
+    const msgs = streamManager.pull(10);
+    const eventMsg = msgs.find(m => m.source === 'hook');
     expect(eventMsg).toBeDefined();
-    expect(eventMsg!.type).toBe('event');
-    if (eventMsg!.type === 'event') {
-      expect(eventMsg!.sessionId).toBe('s1');
+    expect(eventMsg!.sessionId).toBe('s1');
+    if (eventMsg!.event) {
+      expect(eventMsg!.event.tool_name).toBe('Bash');
       expect(eventMsg!.event.session_id).toBe('s1');
     }
   });
@@ -110,17 +125,17 @@ describe('HookHandler', () => {
     // User interaction events: blocks and waits for response
 
     it('PermissionRequest blocks and waits for response', async () => {
-      const broadcasts = captureBroadcasts(wsBus);
       const promise = handler.handleEvent(makeEvent('PermissionRequest', 's2', { message: 'Allow?' }));
 
       await Promise.resolve();
 
-      const taggedMsg = broadcasts.filter(m => m.type === 'event').find(m => (m.event as any).event_id);
+      const msgs = streamManager.pull(10);
+      const taggedMsg = msgs.find(m => m.source === 'hook');
       expect(taggedMsg).toBeDefined();
       expect(taggedMsg!.sessionId).toBe('s2');
-      expect((taggedMsg!.event as any).message).toBe('Allow?');
+      expect(taggedMsg!.event!.message).toBe('Allow?');
 
-      const eventId = (taggedMsg!.event as any).event_id;
+      const eventId = taggedMsg!.event!.event_id as string;
       pendingStore.resolve('s2', eventId, { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
 
       const result = await promise;
@@ -128,15 +143,15 @@ describe('HookHandler', () => {
     });
 
     it('Stop blocks and waits for response', async () => {
-      const broadcasts = captureBroadcasts(wsBus);
       const promise = handler.handleEvent(makeEvent('Stop', 's1'));
 
       await Promise.resolve();
 
-      const taggedMsg = broadcasts.filter(m => m.type === 'event').find(m => (m.event as any).event_id);
+      const msgs = streamManager.pull(10);
+      const taggedMsg = msgs.find(m => m.source === 'hook');
       expect(taggedMsg).toBeDefined();
 
-      const eventId = (taggedMsg!.event as any).event_id;
+      const eventId = taggedMsg!.event!.event_id as string;
       pendingStore.resolve('s1', eventId, { decision: 'block', reason: 'keep going' });
 
       const result = await promise;
@@ -144,15 +159,15 @@ describe('HookHandler', () => {
     });
 
     it('Elicitation blocks and waits for response', async () => {
-      const broadcasts = captureBroadcasts(wsBus);
       const promise = handler.handleEvent(makeEvent('Elicitation', 's1', { message: 'Name?' }));
 
       await Promise.resolve();
 
-      const taggedMsg = broadcasts.filter(m => m.type === 'event').find(m => (m.event as any).event_id);
+      const msgs = streamManager.pull(10);
+      const taggedMsg = msgs.find(m => m.source === 'hook');
       expect(taggedMsg).toBeDefined();
 
-      const eventId = (taggedMsg!.event as any).event_id;
+      const eventId = taggedMsg!.event!.event_id as string;
       pendingStore.resolve('s1', eventId, { hookSpecificOutput: { hookEventName: 'Elicitation', action: 'accept', content: { answer: 'Alice' } } });
 
       const result = await promise;
@@ -162,15 +177,15 @@ describe('HookHandler', () => {
     // AskUserQuestion (PreToolUse) — selective blocking
 
     it('PreToolUse[AskUserQuestion] blocks in takeover mode', async () => {
-      const broadcasts = captureBroadcasts(wsBus);
       const promise = handler.handleEvent(makeEvent('PreToolUse', 's1', { tool_name: 'AskUserQuestion' }));
 
       await Promise.resolve();
 
-      const taggedMsg = broadcasts.filter(m => m.type === 'event').find(m => (m.event as any).event_id);
+      const msgs = streamManager.pull(10);
+      const taggedMsg = msgs.find(m => m.source === 'hook');
       expect(taggedMsg).toBeDefined();
 
-      const eventId = (taggedMsg!.event as any).event_id;
+      const eventId = taggedMsg!.event!.event_id as string;
       pendingStore.resolve('s1', eventId, { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } });
 
       const result = await promise;
@@ -194,11 +209,12 @@ describe('HookHandler', () => {
       expect(result).toEqual({});
     });
 
-    it('PostToolUse broadcasts to frontend', async () => {
-      const broadcasts = captureBroadcasts(wsBus);
+    it('PostToolUse 推送到管道', async () => {
       await handler.handleEvent(makeEvent('PostToolUse', 's1'));
-      const eventMsg = broadcasts.find((m) => m.type === 'event');
+      const msgs = streamManager.pull(10);
+      const eventMsg = msgs.find(m => m.source === 'hook');
       expect(eventMsg).toBeDefined();
+      expect(eventMsg!.event?.event_name).toBe('PostToolUse');
     });
 
     // Category 3: info — returns {} immediately
@@ -213,11 +229,12 @@ describe('HookHandler', () => {
       expect(result).toEqual({});
     });
 
-    it('Notification broadcasts to frontend', async () => {
-      const broadcasts = captureBroadcasts(wsBus);
+    it('Notification 推送到管道', async () => {
       await handler.handleEvent(makeEvent('Notification', 's1'));
-      const eventMsg = broadcasts.find((m) => m.type === 'event');
+      const msgs = streamManager.pull(10);
+      const eventMsg = msgs.find(m => m.source === 'hook');
       expect(eventMsg).toBeDefined();
+      expect(eventMsg!.event?.event_name).toBe('Notification');
     });
   });
 
@@ -345,20 +362,19 @@ describe('HookHandler', () => {
     expect(result).toEqual({});
   });
 
-  it('takeover mode blocking event broadcasts only once', async () => {
+  it('takeover 模式阻塞事件只推入管道一次', async () => {
     handler.setMode('takeover');
-    const broadcasts = captureBroadcasts(wsBus);
 
     const promise = handler.handleEvent(makeEvent('PermissionRequest', 's1'));
     await Promise.resolve();
 
-    // Should be exactly 1 event broadcast (with event_id), not 2
-    const eventMsgs = broadcasts.filter((m) => m.type === 'event');
-    expect(eventMsgs).toHaveLength(1);
-    expect((eventMsgs[0].event as any).event_id).toBeDefined();
+    // 应该恰好一条消息在管道中
+    const msgs = streamManager.pull(10);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].event?.event_id).toBeDefined();
 
     // Clean up
-    const eventId = (eventMsgs[0].event as any).event_id;
+    const eventId = msgs[0].event!.event_id as string;
     pendingStore.resolve('s1', eventId, {});
     await promise;
   });
@@ -375,45 +391,64 @@ describe('HookHandler', () => {
 
   // ── Event with extra fields preserved ──
 
-  it('preserves all fields from the original event in broadcast', async () => {
-    const broadcasts = captureBroadcasts(wsBus);
-
+  it('保留原始事件中的所有字段', async () => {
     await handler.handleEvent(makeEvent('PreToolUse', 's1', { tool_name: 'Bash', input: { command: 'ls' } }));
 
-    const eventMsg = broadcasts.find((m) => m.type === 'event');
-    expect(eventMsg).toBeDefined();
-    if (eventMsg!.type === 'event') {
-      expect((eventMsg!.event as any).tool_name).toBe('Bash');
-      expect((eventMsg!.event as any).input).toEqual({ command: 'ls' });
-    }
+    const msgs = streamManager.pull(10);
+    const msg = msgs.find(m => m.source === 'hook');
+    expect(msg).toBeDefined();
+    expect(msg!.event?.tool_name).toBe('Bash');
+    expect(msg!.event?.input).toEqual({ command: 'ls' });
   });
 
   // ── Sequence numbers ──
 
-  it('assigns monotonically increasing event_id (base36 seq)', async () => {
-    const broadcasts = captureBroadcasts(wsBus);
+  it('hook 和 transcript 共享统一的 seq 计数器', async () => {
+    // hook 事件使用 streamManager.nextSeqFn() 获取 seq
+    await handler.handleEvent(makeEvent('PreToolUse', 's1'));
 
+    // transcript entry 也使用 streamManager.nextSeqFn() 获取 seq
+    const transcriptSeq = streamManager.nextSeqFn();
+    streamManager.push({
+      sessionId: 's1', seq: transcriptSeq, timestamp: Date.now(), source: 'transcript',
+      entry: { index: 0, type: 'assistant', timestamp: Date.now(), blocks: [] },
+    });
+
+    // 再一个 hook 事件
+    await handler.handleEvent(makeEvent('PostToolUse', 's1'));
+
+    const msgs = streamManager.pull(10);
+    // 顺序应为: hook(seq=1), transcript(seq=2), hook(seq=3)
+    expect(msgs).toHaveLength(3);
+    expect(msgs[0].seq).toBe(1);
+    expect(msgs[0].source).toBe('hook');
+    expect(msgs[1].seq).toBe(2);
+    expect(msgs[1].source).toBe('transcript');
+    expect(msgs[2].seq).toBe(3);
+    expect(msgs[2].source).toBe('hook');
+  });
+
+  it('分配单调递增的 event_id (base36 seq)', async () => {
     await handler.handleEvent(makeEvent('PreToolUse', 's1'));
     await handler.handleEvent(makeEvent('PostToolUse', 's1'));
     await handler.handleEvent(makeEvent('Notification', 's1'));
 
-    const eventMsgs = broadcasts.filter(m => m.type === 'event');
-    const ids = eventMsgs.map(m => (m.event as any).event_id as string);
+    const msgs = streamManager.pull(10);
+    const hookMsgs = msgs.filter(m => m.source === 'hook');
+    const ids = hookMsgs.map(m => m.event!.event_id as string);
 
-    // Parse base36 and verify increasing
     const seqs = ids.map(id => parseInt(id, 36));
     for (let i = 1; i < seqs.length; i++) {
       expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
     }
   });
 
-  it('event_id is parseable as base36 integer', async () => {
-    const broadcasts = captureBroadcasts(wsBus);
+  it('event_id 可解析为 base36 整数', async () => {
     await handler.handleEvent(makeEvent('Notification', 's1'));
 
-    // First broadcast is session_start (new session auto-registration), second is the event
-    const eventMsg = broadcasts.find((m) => m.type === 'event')!;
-    const eventId = ((eventMsg as { type: 'event'; event: any }).event).event_id as string;
+    const msgs = streamManager.pull(10);
+    const hookMsg = msgs.find(m => m.source === 'hook')!;
+    const eventId = hookMsg.event!.event_id as string;
     const seq = parseInt(eventId, 36);
     expect(seq).toBeGreaterThan(0);
     expect(Number.isInteger(seq)).toBe(true);
@@ -433,10 +468,9 @@ describe('HookHandler', () => {
     }
   });
 
-  // ── Transcript enrichment ──
+  // ── 事件推送到管道 ──
 
-  it('broadcasts event without model_feedback when transcript_path points to non-existent file', async () => {
-    const broadcasts = captureBroadcasts(wsBus);
+  it('有 transcript_path 时事件推送到管道', async () => {
     const transcriptPath = '/fake/transcript.jsonl';
 
     await handler.handleEvent(
@@ -446,45 +480,22 @@ describe('HookHandler', () => {
       }),
     );
 
-    // Event should be broadcast immediately without model_feedback (enrichment is async)
-    const eventMsg = broadcasts.find((m) => m.type === 'event')!;
-    const evt = (eventMsg as { type: 'event'; event: Record<string, unknown> }).event;
-    expect(evt.event_name).toBe('PreToolUse');
-    expect(evt.transcript_path).toBe(transcriptPath);
-    expect(evt.model_feedback).toBeUndefined();
+    const msgs = streamManager.pull(10);
+    const hookMsg = msgs.find(m => m.source === 'hook');
+    expect(hookMsg).toBeDefined();
+    expect(hookMsg!.event?.event_name).toBe('PreToolUse');
+    expect(hookMsg!.event?.transcript_path).toBe(transcriptPath);
   });
 
-  it('event without transcript_path has no model_feedback', async () => {
-    const broadcasts = captureBroadcasts(wsBus);
-
+  it('SessionStart 事件推送到管道', async () => {
     await handler.handleEvent(makeEvent('SessionStart', 's1'));
 
-    const eventMsg = broadcasts.find((m) => m.type === 'event')!;
-    const evt = (eventMsg as { type: 'event'; event: Record<string, unknown> }).event;
-    expect(evt.model_feedback).toBeUndefined();
+    const msgs = streamManager.pull(10);
+    const hookMsg = msgs.find(m => m.source === 'hook');
+    expect(hookMsg).toBeDefined();
   });
 
-  it('event with transcript_path but non-existent file still broadcasts successfully', async () => {
-    const broadcasts = captureBroadcasts(wsBus);
-
-    await handler.handleEvent(
-      makeEvent('PostToolUse', 's1', {
-        transcript_path: '/nonexistent/path.jsonl',
-        tool_use_id: 'call_doesnotexist',
-      }),
-    );
-
-    // Event should still be broadcast even though transcript reading failed
-    const eventMsg = broadcasts.find((m) => m.type === 'event')!;
-    expect(eventMsg).toBeDefined();
-    const evt = (eventMsg as { type: 'event'; event: Record<string, unknown> }).event;
-    expect(evt.event_name).toBe('PostToolUse');
-    expect(evt.model_feedback).toBeUndefined();
-  });
-
-  it('event without tool_use_id skips enrichment even with transcript_path', async () => {
-    const broadcasts = captureBroadcasts(wsBus);
-
+  it('无 tool_use_id 的事件推送到管道', async () => {
     await handler.handleEvent(
       makeEvent('UserPromptSubmit', 's1', {
         transcript_path: '/fake/transcript.jsonl',
@@ -492,228 +503,205 @@ describe('HookHandler', () => {
       }),
     );
 
-    const eventMsg = broadcasts.find((m) => m.type === 'event')!;
-    const evt = (eventMsg as { type: 'event'; event: Record<string, unknown> }).event;
-    expect(evt.model_feedback).toBeUndefined();
-    expect(evt.prompt).toBe('hello');
+    const msgs = streamManager.pull(10);
+    const hookMsg = msgs.find(m => m.source === 'hook');
+    expect(hookMsg).toBeDefined();
+    expect(hookMsg!.event?.prompt).toBe('hello');
   });
 
-  // ── Async enrichment ──
-
-  describe('async enrichment', () => {
-    let tempDir: string;
-    let transcriptPath: string;
-
-    const toolUseId = 'call_enrich_test';
-
-    function setupTranscript(): string {
-      tempDir = mkdtempSync(join(tmpdir(), 'mypilot-hh-test-'));
-      transcriptPath = join(tempDir, 'transcript.jsonl');
-
-      const lines = [
-        makeTranscriptLine({
-          type: 'assistant',
-          message: {
-            model: 'claude-opus-4-7',
-            usage: { input_tokens: 1000, output_tokens: 200 },
-            content: [
-              { type: 'thinking', thinking: 'I should read the file first' },
-              { type: 'text', text: 'Let me check the configuration.' },
-              { type: 'tool_use', id: toolUseId, name: 'Read', input: {} },
-            ],
-          },
-        }),
-        makeTranscriptLine({
-          type: 'user',
-          message: {
-            content: [
-              { type: 'tool_result', tool_use_id: toolUseId, content: '{"port": 8080}', isError: false },
-            ],
-          },
-        }),
-      ];
-
-      writeFileSync(transcriptPath, lines.join(''), 'utf-8');
-      return transcriptPath;
-    }
-
-    afterEach(() => {
-      try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
-    });
-
-    it('sends event_enrichment for PreToolUse with thinking and text', async () => {
-      const path = setupTranscript();
-      const broadcasts = captureBroadcasts(wsBus);
-
-      const promise = handler.handleEvent(
-        makeEvent('PreToolUse', 's1', {
-          transcript_path: path,
-          tool_use_id: toolUseId,
-          tool_name: 'Read',
-        }),
-      );
-
-      // handleEvent returns immediately (sync path for bystander PreToolUse)
-      const result = await promise;
-      expect(result).toEqual({});
-
-      // Event was broadcast without model_feedback
-      const eventMsg = broadcasts.find((m) => m.type === 'event')!;
-      expect(eventMsg).toBeDefined();
-      const evt = (eventMsg as { type: 'event'; event: Record<string, unknown> }).event;
-      expect(evt.model_feedback).toBeUndefined();
-
-      // Wait for async enrichment to complete (it's fire-and-forget)
-      await vi.waitFor(() => {
-        const enrichment = broadcasts.find((m) => m.type === 'event_enrichment');
-        expect(enrichment).toBeDefined();
-      }, { timeout: 2000, interval: 50 });
-
-      const enrichment = broadcasts.find((m) => m.type === 'event_enrichment')!;
-      const mf = (enrichment as { type: 'event_enrichment'; model_feedback: ModelFeedback }).model_feedback;
-      expect(mf.model).toBe('claude-opus-4-7');
-      expect(mf.thinking).toBe('I should read the file first');
-      expect(mf.text).toBe('Let me check the configuration.');
-      expect(mf.usage).toBeDefined();
-    });
-
-    it('sends event_enrichment for PostToolUse with tool_result only', async () => {
-      const path = setupTranscript();
-      const broadcasts = captureBroadcasts(wsBus);
-
-      const promise = handler.handleEvent(
-        makeEvent('PostToolUse', 's1', {
-          transcript_path: path,
-          tool_use_id: toolUseId,
-          tool_name: 'Read',
-        }),
-      );
-
-      await promise;
-
-      await vi.waitFor(() => {
-        const enrichment = broadcasts.find((m) => m.type === 'event_enrichment');
-        expect(enrichment).toBeDefined();
-      }, { timeout: 2000, interval: 50 });
-
-      const enrichment = broadcasts.find((m) => m.type === 'event_enrichment')!;
-      const mf = (enrichment as { type: 'event_enrichment'; model_feedback: ModelFeedback }).model_feedback;
-      expect(mf.model).toBe('claude-opus-4-7');
-      expect(mf.tool_result).toBe('{"port": 8080}');
-      // PostToolUse strips thinking and text
-      expect(mf.thinking).toBeUndefined();
-      expect(mf.text).toBeUndefined();
-    });
-
-    it('does not send event_enrichment when transcript has no matching entry', async () => {
-      tempDir = mkdtempSync(join(tmpdir(), 'mypilot-hh-test-'));
-      transcriptPath = join(tempDir, 'transcript.jsonl');
-      // Write a transcript without the tool_use we reference
-      writeFileSync(transcriptPath, makeTranscriptLine({
-        type: 'assistant',
-        message: {
-          model: 'old-model',
-          usage: {},
-          content: [{ type: 'tool_use', id: 'some_other_call', name: 'Bash', input: {} }],
-        },
-      }), 'utf-8');
-
-      const broadcasts = captureBroadcasts(wsBus);
-
-      await handler.handleEvent(
-        makeEvent('PreToolUse', 's1', {
-          transcript_path: transcriptPath,
-          tool_use_id: 'non_matching_call',
-          tool_name: 'Bash',
-        }),
-      );
-
-      // Give async enrichment time to fail
-      await new Promise((r) => setTimeout(r, 600));
-
-      // Only the event broadcast, no event_enrichment
-      const enrichmentMsgs = broadcasts.filter((m) => m.type === 'event_enrichment');
-      expect(enrichmentMsgs).toHaveLength(0);
-    });
-
-    it('enrichment updates event in history for reconnecting clients', async () => {
-      const path = setupTranscript();
-      const broadcasts = captureBroadcasts(wsBus);
-
-      await handler.handleEvent(
-        makeEvent('PreToolUse', 's1', {
-          transcript_path: path,
-          tool_use_id: toolUseId,
-          tool_name: 'Read',
-        }),
-      );
-
-      await vi.waitFor(() => {
-        const enrichment = broadcasts.find((m) => m.type === 'event_enrichment');
-        expect(enrichment).toBeDefined();
-      }, { timeout: 2000, interval: 50 });
-
-      // History now includes model_feedback
-      const history = handler.getEventHistory();
-      const enrichedEvent = history.find(
-        (e) => e.event.event_id !== undefined && e.sessionId === 's1',
-      );
-      expect(enrichedEvent).toBeDefined();
-      expect(enrichedEvent!.event.model_feedback).toBeDefined();
-      expect(enrichedEvent!.event.model_feedback!.model).toBe('claude-opus-4-7');
-    });
-
-    it('gracefully handles enrichment errors without affecting event delivery', async () => {
-      // Use a path that will cause extractModelFeedback to throw (directory as file)
-      tempDir = mkdtempSync(join(tmpdir(), 'mypilot-hh-test-'));
-      const path = join(tempDir, 'transcript.jsonl');
-      // Create a directory with the same name to cause a read error
-      mkdirSync(path);
-
-      const broadcasts = captureBroadcasts(wsBus);
-
-      const result = await handler.handleEvent(
-        makeEvent('PreToolUse', 's1', {
-          transcript_path: path,
-          tool_use_id: 'call_whatever',
-          tool_name: 'Bash',
-        }),
-      );
-
-      // Event was still broadcast
-      expect(result).toEqual({});
-      const eventMsg = broadcasts.find((m) => m.type === 'event');
-      expect(eventMsg).toBeDefined();
-
-      // Give async enrichment time to try and fail
-      await new Promise((r) => setTimeout(r, 600));
-
-      // No enrichment message sent
-      const enrichmentMsgs = broadcasts.filter((m) => m.type === 'event_enrichment');
-      expect(enrichmentMsgs).toHaveLength(0);
-    });
-  });
-
-  it('adds timestamp to every event', async () => {
-    const broadcasts = captureBroadcasts(wsBus);
-
+  it('为每个事件添加 timestamp', async () => {
     await handler.handleEvent(makeEvent('SessionStart', 's1'));
 
-    const eventMsg = broadcasts.find((m) => m.type === 'event')!;
-    const evt = (eventMsg as { type: 'event'; event: Record<string, unknown> }).event;
-    expect(evt.timestamp).toBeTypeOf('number');
-    expect(evt.timestamp).toBeGreaterThan(0);
+    const msgs = streamManager.pull(10);
+    const hookMsg = msgs.find(m => m.source === 'hook')!;
+    expect(hookMsg.timestamp).toBeTypeOf('number');
+    expect(hookMsg.timestamp).toBeGreaterThan(0);
   });
 
-  it('timestamp is monotonically increasing', async () => {
-    const broadcasts = captureBroadcasts(wsBus);
-
+  it('timestamp 单调递增', async () => {
     await handler.handleEvent(makeEvent('PreToolUse', 's1'));
     await handler.handleEvent(makeEvent('PostToolUse', 's1'));
 
-    const eventMsgs = broadcasts.filter(m => m.type === 'event');
-    const t1 = (eventMsgs[0].event as Record<string, unknown>).timestamp as number;
-    const t2 = (eventMsgs[1].event as Record<string, unknown>).timestamp as number;
-    expect(t2).toBeGreaterThanOrEqual(t1);
+    const msgs = streamManager.pull(10);
+    const hookMsgs = msgs.filter(m => m.source === 'hook');
+    expect(hookMsgs.length).toBeGreaterThanOrEqual(2);
+    expect(hookMsgs[1].timestamp).toBeGreaterThanOrEqual(hookMsgs[0].timestamp);
+  });
+
+  // ── 消息管道推送 ──
+
+  describe('消息管道推送', () => {
+    it('hook 事件推送到管道（非直接广播）', async () => {
+      await handler.handleEvent(makeEvent('PreToolUse', 's1', {
+        tool_name: 'Bash',
+        tool_use_id: 'tu1',
+      }));
+
+      // 事件进入管道，不再直接广播
+      const msgs = streamManager.pull(10);
+      expect(msgs.length).toBeGreaterThanOrEqual(1);
+      const hookMsg = msgs.find(m => m.source === 'hook');
+      expect(hookMsg).toBeDefined();
+      expect(hookMsg!.sessionId).toBe('s1');
+      expect(hookMsg!.event?.event_name).toBe('PreToolUse');
+    });
+
+    it('Notification 推送到管道', async () => {
+      await handler.handleEvent(makeEvent('Notification', 's1'));
+
+      const msgs = streamManager.pull(10);
+      expect(msgs.some(m => m.event?.event_name === 'Notification')).toBe(true);
+    });
+
+    it('SessionStart 触发 streamManager.startSession', async () => {
+      const spy = vi.spyOn(streamManager, 'startSession');
+
+      await handler.handleEvent(makeEvent('SessionStart', 's1', {
+        transcript_path: '/tmp/transcript.jsonl',
+      }));
+
+      expect(spy).toHaveBeenCalledWith('s1', '/tmp/transcript.jsonl');
+    });
+
+    it('SessionEnd 触发 streamManager.stopSession', async () => {
+      const spy = vi.spyOn(streamManager, 'stopSession');
+
+      await handler.handleEvent(makeEvent('SessionEnd', 's1'));
+
+      expect(spy).toHaveBeenCalledWith('s1');
+    });
+
+    it('SessionEnd 仍然广播 session_end', async () => {
+      const broadcasts = captureBroadcasts(wsBus);
+      // 先注册 session
+      await handler.handleEvent(makeEvent('SessionStart', 's1'));
+
+      await handler.handleEvent(makeEvent('SessionEnd', 's1'));
+
+      const endMsg = broadcasts.find((m) => m.type === 'session_end');
+      expect(endMsg).toBeDefined();
+    });
+
+    it('交互式 PreToolUse (AskUserQuestion) 仍推送到管道并阻塞 takeover', async () => {
+      handler.setMode('takeover');
+
+      const promise = handler.handleEvent(makeEvent('PreToolUse', 's1', {
+        tool_use_id: 'tu_aq',
+        tool_name: 'AskUserQuestion',
+        transcript_path: '/tmp/transcript.jsonl',
+      }));
+
+      await Promise.resolve();
+
+      // 事件进入管道
+      const msgs = streamManager.pull(10);
+      expect(msgs.some(m => m.event?.tool_name === 'AskUserQuestion')).toBe(true);
+
+      // takeover 模式下阻塞等待
+      const pending = handler.getPendingInteractions();
+      expect(pending.length).toBeGreaterThanOrEqual(1);
+
+      // 恢复 pending
+      const eventId = pending[0].eventId;
+      pendingStore.resolve('s1', eventId, { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } });
+      const result = await promise;
+      expect(result).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } });
+    });
+
+    it('管道背压时重试后返回 503', async () => {
+      // 塞满管道直到 highWatermark
+      for (let i = 1; i <= 15; i++) {
+        streamManager.push({
+          sessionId: 'filler', seq: i, timestamp: Date.now(), source: 'hook',
+          event: { session_id: 'filler', event_name: 'Notification' },
+        });
+      }
+      expect(streamManager.isBackpressured()).toBe(true);
+
+      // hook event 推入会失败，重试后仍失败返回 503
+      await expect(
+        handler.handleEvent(makeEvent('PreToolUse', 's1', { tool_name: 'Bash' })),
+      ).rejects.toMatchObject({ status: 503 });
+    });
+
+    it('新 session 仍广播 session_start', async () => {
+      const broadcasts = captureBroadcasts(wsBus);
+
+      await handler.handleEvent(makeEvent('SessionStart', 'new-session'));
+
+      const startMsg = broadcasts.find((m) => m.type === 'session_start');
+      expect(startMsg).toBeDefined();
+      if (startMsg!.type === 'session_start') {
+        expect(startMsg!.session.id).toBe('new-session');
+      }
+    });
+
+    // ── agent_transcript_path（子代理 transcript） ──
+
+    it('SubagentStop 携带 agent_transcript_path 时启动子代理 tailer', async () => {
+      const spy = vi.spyOn(streamManager, 'startSession');
+
+      await handler.handleEvent(makeEvent('SubagentStop', 's1', {
+        transcript_path: '/tmp/main-transcript.jsonl',
+        agent_id: 'agent-001',
+        agent_transcript_path: '/tmp/agent-transcript.jsonl',
+      }));
+
+      expect(spy).toHaveBeenCalledWith('agent-001', '/tmp/agent-transcript.jsonl');
+    });
+
+    it('SubagentStop 为新 agent_id 注册会话', async () => {
+      await handler.handleEvent(makeEvent('SubagentStop', 's1', {
+        agent_id: 'agent-002',
+        agent_transcript_path: '/tmp/agent-transcript.jsonl',
+      }));
+
+      expect(sessionStore.has('agent-002')).toBe(true);
+    });
+
+    it('SubagentStop 为新 agent 会话广播 session_start', async () => {
+      const broadcasts = captureBroadcasts(wsBus);
+
+      await handler.handleEvent(makeEvent('SubagentStop', 's1', {
+        agent_id: 'agent-003',
+        agent_transcript_path: '/tmp/agent-transcript.jsonl',
+      }));
+
+      const agentStartMsg = broadcasts.find((m) =>
+        m.type === 'session_start' && (m as { session: { id: string } }).session.id === 'agent-003',
+      );
+      expect(agentStartMsg).toBeDefined();
+    });
+
+    it('重复 SubagentStop 不重复广播 agent 的 session_start', async () => {
+      const broadcasts = captureBroadcasts(wsBus);
+
+      await handler.handleEvent(makeEvent('SubagentStop', 's1', {
+        agent_id: 'agent-004',
+        agent_transcript_path: '/tmp/agent-transcript.jsonl',
+      }));
+      await handler.handleEvent(makeEvent('SubagentStop', 's1', {
+        agent_id: 'agent-004',
+        agent_transcript_path: '/tmp/agent-transcript.jsonl',
+      }));
+
+      const startMsgs = broadcasts.filter((m) =>
+        m.type === 'session_start' && (m as { session: { id: string } }).session.id === 'agent-004',
+      );
+      expect(startMsgs).toHaveLength(1);
+    });
+
+    it('SubagentStart 没有 agent_transcript_path 时不启动子代理 tailer', async () => {
+      const spy = vi.spyOn(streamManager, 'startSession');
+
+      await handler.handleEvent(makeEvent('SubagentStart', 's1', {
+        transcript_path: '/tmp/main-transcript.jsonl',
+        agent_id: 'agent-005',
+      }));
+
+      // 应该只调用了主会话的 startSession，没有调用 agent_id 的
+      const agentCalls = spy.mock.calls.filter(([sessionId]: [string, ...any[]]) => sessionId === 'agent-005');
+      expect(agentCalls).toHaveLength(0);
+    });
   });
 });

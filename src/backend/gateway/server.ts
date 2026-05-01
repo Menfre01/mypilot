@@ -9,6 +9,7 @@ import { PushService } from './push-service.js';
 import type { PushConfigFile } from './push-config.js';
 import { loadGatewayState, saveGatewayState } from './gateway-state.js';
 import { PROTOCOL_VERSION, type GatewayConnected, type ClientMessage } from '../../shared/protocol.js';
+import { SessionStreamManager } from './session-stream-manager.js';
 
 export type { PushConfigFile as PushConfig };
 
@@ -39,6 +40,34 @@ export function createServer(
     return lastEventSeq != null
       ? eventLogger.readEventsAfter(lastEventSeq, MAX_RECENT_EVENTS)
       : hookHandler.getEventHistory();
+  }
+
+  function getRecentTranscriptEntries(lastEventSeq?: number) {
+    const fromSeq = lastEventSeq ?? 0;
+    const fromBuffer = sessionStreamManager.getAllTranscriptEntries()
+      .filter(m => m.seq > fromSeq && m.entry)
+      .slice(-MAX_RECENT_EVENTS)
+      .map(m => ({ sessionId: m.sessionId, seq: m.seq, entry: m.entry! }));
+
+    if (fromBuffer.length === 0) {
+      if (lastEventSeq == null) return [];
+      // 管道缓冲区已淘汰，回退磁盘
+      return eventLogger.readTranscriptEntriesAfter(lastEventSeq, MAX_RECENT_EVENTS);
+    }
+
+    // 管道有数据，但可能不完整（部分条目已被 drain 消费），检查 gap
+    if (lastEventSeq != null && lastEventSeq <= sessionStreamManager.maxDrainedSeq) {
+      const minBufferedSeq = fromBuffer[0].seq;
+      if (minBufferedSeq > lastEventSeq + 1) {
+        const diskEntries = eventLogger.readTranscriptEntriesBetween(
+          lastEventSeq, minBufferedSeq,
+        );
+        const merged = [...diskEntries, ...fromBuffer];
+        return merged.slice(-MAX_RECENT_EVENTS);
+      }
+    }
+
+    return fromBuffer;
   }
 
   const pushService = pushConfig
@@ -73,6 +102,22 @@ export function createServer(
     savedState ? { mode: savedState.mode, takeoverOwner: savedState.takeoverOwner } : undefined,
     persistState,
   );
+
+  const sessionStreamManager = new SessionStreamManager(eventLogger, wsBus);
+  sessionStreamManager.recoverSeq(eventLogger);
+  hookHandler.setStreamManager(sessionStreamManager);
+
+  function drainPipeline(): void {
+    const backlog = sessionStreamManager.bufferedCount;
+    const batchSize = backlog > 300 ? 50 : backlog > 100 ? 30 : 20;
+    const messages = sessionStreamManager.pull(batchSize);
+    for (const msg of messages) {
+      sessionStreamManager.broadcastMessage(msg);
+      eventLogger.logSessionMessage(msg);
+    }
+  }
+
+  sessionStreamManager.onDrain(drainPipeline);
 
   let httpServer: Server;
 
@@ -136,6 +181,7 @@ export function createServer(
   function broadcastSessionState(lastEventSeq?: number, targetDeviceId?: string, cachedEvents?: ReturnType<typeof getRecentEvents>): void {
     const recentEvents = cachedEvents ?? getRecentEvents(lastEventSeq);
     const pendingInteractions = hookHandler.getPendingInteractions();
+    const transcriptEntries = getRecentTranscriptEntries(lastEventSeq);
 
     const pendingIds = new Set(pendingInteractions.map(p => p.eventId));
     const dedupedEvents = pendingIds.size > 0
@@ -150,6 +196,7 @@ export function createServer(
       recentEvents: dedupedEvents,
       pendingInteractions,
       takeoverOwner: hookHandler.getTakeoverOwner() ?? undefined,
+      transcriptEntries: transcriptEntries.length > 0 ? transcriptEntries : undefined,
     };
     wsBus.sendSessionList(msg, targetDeviceId);
   }
@@ -176,6 +223,11 @@ export function createServer(
         broadcastSessionState(message.lastEventSeq, deviceId);
         break;
       }
+      case 'subscribe_session':
+        void sessionStreamManager.replayHistory(
+          message.sessionId, message.fromSeq, deviceId,
+        );
+        break;
       case 'delete_session':
         hookHandler.deleteSession(message.sessionId);
         break;
@@ -223,6 +275,7 @@ export function createServer(
     },
 
     async stop(): Promise<void> {
+      sessionStreamManager.shutdown();
       pendingStore.releaseAll();
       await wsBus.close();
       return new Promise((resolve) => {

@@ -38,7 +38,7 @@ export interface SessionInfo {
   displayName?: string;
 }
 
-// ── LLM feedback extracted from transcript ──
+// ── Token usage ──
 
 export interface TokenUsage {
   input_tokens: number;
@@ -47,12 +47,29 @@ export interface TokenUsage {
   cache_creation_input_tokens?: number;
 }
 
-export interface ModelFeedback {
-  model: string;
-  usage: TokenUsage;
-  text?: string;
+// ── Transcript entry types ──
+
+export type TranscriptBlockType = 'thinking' | 'text' | 'tool_use' | 'tool_result';
+
+export interface TranscriptBlock {
+  type: TranscriptBlockType;
   thinking?: string;
-  tool_result?: string;
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  tool_use_id?: string;
+  content?: string;
+  isError?: boolean;
+}
+
+export interface TranscriptEntry {
+  index: number;
+  type: 'assistant' | 'user';
+  timestamp: number;
+  model?: string;
+  usage?: TokenUsage;
+  blocks: TranscriptBlock[];
 }
 
 // ── Hook event ──
@@ -62,7 +79,6 @@ export interface SSEHookEvent {
   event_name: string;
   event_id: string;
   tool_name?: string;
-  model_feedback?: ModelFeedback;
   [key: string]: unknown;
 }
 
@@ -87,7 +103,7 @@ export type GatewayMode = 'bystander' | 'takeover';
 
 // ── Protocol version ──
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 // ── Gateway → Client messages ──
 
@@ -96,7 +112,7 @@ export type GatewayMessage =
   | GatewaySessionStart
   | GatewaySessionEnd
   | GatewayEvent
-  | GatewayEventEnrichment
+  | GatewayTranscriptEntry
   | GatewayModeChanged;
 
 export interface GatewayConnected {
@@ -107,6 +123,7 @@ export interface GatewayConnected {
   recentEvents: SessionEvent[];
   pendingInteractions: PendingInteraction[];
   takeoverOwner?: string;
+  transcriptEntries?: { sessionId: string; seq: number; entry: TranscriptEntry }[];
 }
 
 export interface GatewaySessionStart {
@@ -125,12 +142,11 @@ export interface GatewayEvent {
   event: SSEHookEvent;
 }
 
-export interface GatewayEventEnrichment {
-  type: 'event_enrichment';
+export interface GatewayTranscriptEntry {
+  type: 'transcript_entry';
   sessionId: string;
-  eventId: string;
-  model_feedback: ModelFeedback;
-  tool_use_id?: string;
+  seq: number;
+  entry: TranscriptEntry;
 }
 
 export interface GatewayModeChanged {

@@ -1,7 +1,7 @@
 // ── Protocol version ──
 
 /** Current protocol version. MAJOR bump = breaking changes (reject old clients). */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 // ── Pairing ──
 
@@ -79,7 +79,7 @@ export interface SessionInfo {
   startedAt: number;
 }
 
-// ── LLM feedback extracted from transcript ──
+// ── Token usage ──
 
 export interface TokenUsage {
   input_tokens: number;
@@ -88,22 +88,39 @@ export interface TokenUsage {
   cache_creation_input_tokens?: number;
 }
 
-export interface ModelFeedback {
-  model: string;
-  usage: TokenUsage;
-  /** 截断到 500 字符，assistant 消息中的 text 内容 */
-  text?: string;
-  /** 截断到 300 字符，assistant 消息中的 thinking 内容 */
+// ── Transcript entry types ──
+
+export type TranscriptBlockType = 'thinking' | 'text' | 'tool_use' | 'tool_result';
+
+export interface TranscriptBlock {
+  type: TranscriptBlockType;
+  /** thinking/text block content */
   thinking?: string;
-  /** 截断到 1000 字符，工具执行结果（仅 PostToolUse 等事件有） */
-  tool_result?: string;
+  text?: string;
+  /** tool_use block fields */
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  /** tool_result block fields */
+  tool_use_id?: string;
+  content?: string;
+  isError?: boolean;
+}
+
+export interface TranscriptEntry {
+  /** Line index in transcript file, for dedup */
+  index: number;
+  type: 'assistant' | 'user';
+  timestamp: number;
+  model?: string;
+  usage?: TokenUsage;
+  blocks: TranscriptBlock[];
 }
 
 // ── Hook event payload ──
 
 export interface SSEHookEvent {
   session_id: string;
-  model_feedback?: ModelFeedback;
   [key: string]: unknown;
 }
 
@@ -111,6 +128,19 @@ export interface SSEHookEvent {
 export interface SessionEvent {
   sessionId: string;
   event: SSEHookEvent;
+}
+
+// ── SessionMessage：管道内统一消息结构 ──
+
+export interface SessionMessage {
+  sessionId: string;
+  seq: number;
+  timestamp: number;
+  source: 'hook' | 'transcript';
+  /** 当 source === 'hook' 时存在 */
+  event?: SSEHookEvent;
+  /** 当 source === 'transcript' 时存在 */
+  entry?: TranscriptEntry;
 }
 
 // ── Gateway mode ──
@@ -133,6 +163,7 @@ export interface GatewayConnected {
   recentEvents: { sessionId: string; event: SSEHookEvent }[];
   pendingInteractions: PendingInteraction[];
   takeoverOwner?: string;
+  transcriptEntries?: { sessionId: string; seq: number; entry: TranscriptEntry }[];
 }
 
 export type GatewayMessage =
@@ -140,7 +171,7 @@ export type GatewayMessage =
   | { type: 'session_start'; session: SessionInfo }
   | { type: 'session_end'; sessionId: string }
   | { type: 'event'; sessionId: string; event: SSEHookEvent }
-  | { type: 'event_enrichment'; sessionId: string; eventId: string; model_feedback: ModelFeedback; tool_use_id?: string }
+  | { type: 'transcript_entry'; sessionId: string; seq: number; entry: TranscriptEntry }
   | { type: 'mode_changed'; mode: GatewayMode; takeoverOwner?: string };
 
 // ── WebSocket protocol: Frontend -> Gateway ──
@@ -155,6 +186,7 @@ export type ClientMessage =
   | { type: 'delete_session'; sessionId: string }
   | { type: 'register_device'; platform: DevicePlatform; locale?: string }
   | { type: 'register_push'; deviceToken: string; environment?: APNEnvironment }
+  | { type: 'subscribe_session'; sessionId: string; fromSeq: number }
   | { type: 'disconnect' };
 
 export type DevicePlatform = 'ios' | 'android' | 'web' | 'desktop';

@@ -14,9 +14,9 @@ import type {
   SSEHookEvent,
   GatewayMessage,
   HookEventName,
-  ModelFeedback,
 } from '../../shared/protocol.js';
-import { extractModelFeedback } from './model-feedback.js';
+import type { SessionStreamManager } from './session-stream-manager.js';
+import type { SessionMessage } from '../../shared/protocol.js';
 
 export class HttpError extends Error {
   readonly status: number;
@@ -41,7 +41,7 @@ export class HookHandler {
   private mode: GatewayMode;
   private takeoverOwner: string | null;
   private eventLogger: EventLogger | null;
-  private _seq = 0;
+  private streamManager: SessionStreamManager | null = null;
   private eventHistory: { sessionId: string; event: SSEHookEvent }[] = [];
   private historyHead = 0;
   private maxHistory = 200;
@@ -83,8 +83,6 @@ export class HookHandler {
       const recent = this.eventLogger.loadRecentEvents(this.maxHistory);
       for (const entry of recent) {
         this.eventHistory.push({ sessionId: entry.sessionId, event: entry.event });
-        const seq = entry.seq;
-        if (seq > this._seq) this._seq = seq;
 
         this.sessionStore.register(entry.sessionId);
 
@@ -102,15 +100,6 @@ export class HookHandler {
     }
     this._processing = true;
 
-    let deferredEnrich: {
-      sessionId: string;
-      eventId: string;
-      transcriptPath: string;
-      toolUseId: string;
-      eventName: string;
-      toolName: string | undefined;
-    } | null = null;
-
     try {
       let event: RawHookEvent;
       try {
@@ -126,27 +115,12 @@ export class HookHandler {
 
       const eventName = event.hook_event_name;
 
-      const isNewSession = !this.sessionStore.has(sessionId);
-      const sessionInfo = this.sessionStore.register(sessionId);
+      this._registerAndBroadcastNewSession(sessionId);
 
-      const seq = ++this._seq;
+      const seq = this.streamManager?.nextSeqFn() ?? 0;
       const eventId = seq.toString(36);
 
       const transcriptPath = event.transcript_path as string | undefined;
-      const toolUseId = event.tool_use_id as string | undefined;
-      const agentId = event.agent_id as string | undefined;
-      if (transcriptPath && toolUseId && !agentId && !HookHandler.NO_ENRICH_EVENTS.has(eventName as HookEventName)) {
-        deferredEnrich = {
-          sessionId,
-          eventId,
-          transcriptPath,
-          toolUseId,
-          eventName,
-          toolName: event.tool_name as string | undefined,
-        };
-      } else if (transcriptPath) {
-        console.log('[ModelFeedback] skip %s (no tool_use_id or in no-enrich list)', eventName);
-      }
 
       const hookEvent: SSEHookEvent = {
         ...event,
@@ -158,11 +132,36 @@ export class HookHandler {
       this.pushToHistory(sessionId, hookEvent);
       this.eventLogger?.log(sessionId, hookEvent, seq);
 
-      if (isNewSession) {
-        this.broadcastAll({ type: 'session_start', session: sessionInfo });
+      const sessionMsg: SessionMessage = {
+        sessionId,
+        seq,
+        timestamp: hookEvent.timestamp as number,
+        source: 'hook',
+        event: hookEvent,
+      };
+
+      if (this.streamManager) {
+        if (!this.streamManager.push(sessionMsg)) {
+          throw new HttpError('Service Unavailable — pipeline backpressured', 503);
+        }
       }
 
-      this.broadcastAll({ type: 'event', sessionId, event: hookEvent });
+      // 任意携带 transcript_path 的事件幂等启动 tailer，SessionEnd 回收
+      if (transcriptPath) {
+        this.streamManager?.startSession(sessionId, transcriptPath);
+      }
+      if (eventName === 'SessionEnd') {
+        this.streamManager?.stopSession(sessionId);
+      }
+
+      // 子代理 transcript（agent_transcript_path + agent_id）
+      // SubagentStop 事件携带 agent_transcript_path，用于启动子代理 tailer
+      const agentTranscriptPath = event.agent_transcript_path as string | undefined;
+      const agentId = event.agent_id as string | undefined;
+      if (agentTranscriptPath && agentId) {
+        this._registerAndBroadcastNewSession(agentId);
+        this.streamManager?.startSession(agentId, agentTranscriptPath);
+      }
 
       if (this.mode === 'takeover' && (isUserInteractionEvent(eventName) || isInteractivePreToolUse(eventName, hookEvent))) {
         this.trySendPush(sessionId, eventId, eventName, hookEvent);
@@ -181,9 +180,14 @@ export class HookHandler {
       const resolvers = this._nextResolvers;
       this._nextResolvers = [];
       for (const r of resolvers) r();
-      if (deferredEnrich) {
-        this.startEnrichment(deferredEnrich);
-      }
+    }
+  }
+
+  private _registerAndBroadcastNewSession(sessionId: string): void {
+    const isNew = !this.sessionStore.has(sessionId);
+    const info = this.sessionStore.register(sessionId);
+    if (isNew) {
+      this.broadcastAll({ type: 'session_start', session: info });
     }
   }
 
@@ -195,69 +199,6 @@ export class HookHandler {
       this.eventHistory.push({ sessionId, event });
     }
     this.historyCache = null;
-  }
-
-  private updateEventInHistory(sessionId: string, eventId: string, modelFeedback: ModelFeedback): void {
-    for (let i = 0; i < this.eventHistory.length; i++) {
-      const entry = this.eventHistory[i];
-      if (entry.sessionId === sessionId && entry.event.event_id === eventId) {
-        entry.event.model_feedback = modelFeedback;
-        this.historyCache = null;
-        return;
-      }
-    }
-  }
-
-  private startEnrichment(params: {
-    sessionId: string;
-    eventId: string;
-    transcriptPath: string;
-    toolUseId: string;
-    eventName: string;
-    toolName: string | undefined;
-  }): void {
-    const { sessionId, eventId, transcriptPath, toolUseId, eventName, toolName } = params;
-
-    // Fire-and-forget: enrichment must never block event processing.
-    void (async () => {
-      try {
-        const fullFeedback = await extractModelFeedback(transcriptPath, toolUseId, { requireToolResult: eventName === 'PostToolUse' });
-        if (!fullFeedback) return;
-
-        // PostToolUse shares the same tool_use_id as PreToolUse;
-        // only keep tool_result to avoid duplicate content on the client.
-        const modelFeedback: ModelFeedback = eventName === 'PostToolUse'
-          ? { model: fullFeedback.model, usage: fullFeedback.usage, tool_result: fullFeedback.tool_result }
-          : fullFeedback;
-
-        const hasContent = modelFeedback.thinking || modelFeedback.text || modelFeedback.tool_result;
-        console.log(
-          '[ModelFeedback] enriched %s/%s: model=%s tokens(in=%d out=%d)%s',
-          eventName,
-          toolName ?? '-',
-          modelFeedback.model,
-          modelFeedback.usage.input_tokens,
-          modelFeedback.usage.output_tokens,
-          hasContent ? ' +content' : '',
-        );
-
-        this.updateEventInHistory(sessionId, eventId, modelFeedback);
-
-        this.broadcastAll({
-          type: 'event_enrichment',
-          sessionId,
-          eventId,
-          model_feedback: modelFeedback,
-          tool_use_id: toolUseId,
-        });
-      } catch (err) {
-        // Enrichment is best-effort — the event was already delivered.
-        console.error(
-          '[ModelFeedback] async enrichment failed: %s',
-          err instanceof Error ? err.message : err,
-        );
-      }
-    })();
   }
 
   deleteSession(sessionId: string): void {
@@ -284,6 +225,10 @@ export class HookHandler {
     return this.mode;
   }
 
+  setStreamManager(sm: SessionStreamManager): void {
+    this.streamManager = sm;
+  }
+
   getTakeoverOwner(): string | null {
     return this.takeoverOwner;
   }
@@ -303,13 +248,6 @@ export class HookHandler {
   getPendingInteractions(): { sessionId: string; eventId: string; event: SSEHookEvent }[] {
     return this.pendingStore.getPending();
   }
-
-  /** Events where transcript enrichment is skipped (no new LLM output to extract). */
-  private static readonly NO_ENRICH_EVENTS: ReadonlySet<HookEventName> = new Set<HookEventName>([
-    'SessionStart', 'SessionEnd', 'InstructionsLoaded', 'SubagentStart',
-    'StopFailure', 'PermissionDenied', 'Notification', 'PreCompact',
-    'PostCompact', 'CwdChanged', 'FileChanged', 'WorktreeRemove',
-  ]);
 
   private static readonly DEDUP_WINDOW_MS = 2000;
   private static readonly STALE_THRESHOLD_MS = 20_000;
