@@ -121,7 +121,7 @@ export function createServer(
 
   sessionStreamManager.onDrain(drainPipeline);
 
-  const SESSION_STALE_MS = 30 * 60_000;
+  const SESSION_STALE_MS = 6 * 60 * 60_000;
   const staleCleanup = setInterval(cleanupStaleSessions, 60_000);
 
   let httpServer: Server;

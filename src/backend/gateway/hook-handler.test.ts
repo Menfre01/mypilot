@@ -12,6 +12,7 @@ import type { GatewayMessage } from '../../shared/protocol.js';
 import { makeTranscriptLine } from './ws-test-helpers.js';
 import { EventLogger } from './event-logger.js';
 import { SessionStreamManager } from './session-stream-manager.js';
+import { PushService } from './push-service.js';
 
 // ── Helpers ──
 
@@ -703,6 +704,115 @@ describe('HookHandler', () => {
       // 应该只调用了主会话的 startSession，没有调用 agent_id 的
       const agentCalls = spy.mock.calls.filter(([sessionId]: [string, ...any[]]) => sessionId === 'agent-005');
       expect(agentCalls).toHaveLength(0);
+    });
+  });
+
+  // ── Push notification behaviour ──
+
+  describe('push with backpressure', () => {
+    it('管道背压时不阻断推送发送', async () => {
+      // 创建带 PushService 的 handler
+      const pushService = new PushService('https://push.example.com', 'test-key', 'gw-1');
+      const pushSpy = vi.spyOn(pushService, 'sendPush').mockResolvedValue({ ok: true });
+      const handlerWithPush = new HookHandler(
+        sessionStore, pendingStore, deviceStore, wsBus, eventLogger, pushService,
+      );
+      handlerWithPush.setStreamManager(streamManager);
+
+      // 注册 iOS 设备并设置为 takeover
+      deviceStore.register('ios-device', 'ios', 'en');
+      deviceStore.setPushToken('ios-device', 'device-token-abc', 'sandbox');
+      deviceStore.setConnected('ios-device', false);
+      handlerWithPush.setMode('takeover', 'ios-device');
+
+      // 塞满管道触发背压
+      for (let i = 1; i <= 15; i++) {
+        streamManager.push({
+          sessionId: 'filler', seq: i, timestamp: Date.now(), source: 'hook',
+          event: { session_id: 'filler', event_name: 'Notification' },
+        });
+      }
+      expect(streamManager.isBackpressured()).toBe(true);
+
+      // 发起交互事件 — 应该先推送再 503
+      await expect(
+        handlerWithPush.handleEvent(makeEvent('PermissionRequest', 's1', { tool_name: 'Bash' })),
+      ).rejects.toMatchObject({ status: 503 });
+
+      // 推送应该在背压报错之前已发出
+      expect(pushSpy).toHaveBeenCalledTimes(1);
+      expect(pushSpy).toHaveBeenCalledWith(
+        'device-token-abc',
+        expect.objectContaining({ eventName: 'PermissionRequest' }),
+        expect.any(AbortSignal),
+      );
+    });
+  });
+
+  describe('push cancellation', () => {
+    it('SessionEnd 取消该 session 的推送', async () => {
+      const pushService = new PushService('https://push.example.com', 'test-key', 'gw-1');
+      // 永不 resolve，模拟推送进行中
+      const pushSpy = vi.spyOn(pushService, 'sendPush').mockReturnValue(
+        new Promise(() => {}),
+      );
+      const handlerWithPush = new HookHandler(
+        sessionStore, pendingStore, deviceStore, wsBus, eventLogger, pushService,
+      );
+      handlerWithPush.setStreamManager(streamManager);
+
+      deviceStore.register('ios-device', 'ios', 'en');
+      deviceStore.setPushToken('ios-device', 'token-abc', 'sandbox');
+      deviceStore.setConnected('ios-device', false);
+      handlerWithPush.setMode('takeover', 'ios-device');
+
+      // 发送交互事件，触发推送（不 await，让它在后台运行）
+      handlerWithPush.handleEvent(
+        makeEvent('PermissionRequest', 's1', { tool_name: 'Bash' }),
+      );
+
+      // 等待推送被调用
+      await vi.waitFor(() => { expect(pushSpy).toHaveBeenCalled(); }, { timeout: 2000 });
+
+      // 获取传递的 signal
+      const signal = pushSpy.mock.calls[0][2] as AbortSignal;
+      expect(signal.aborted).toBe(false);
+
+      // 发送 SessionEnd 应该取消推送
+      await handlerWithPush.handleEvent(makeEvent('SessionEnd', 's1'));
+
+      // signal 应该被 abort
+      expect(signal.aborted).toBe(true);
+    });
+
+    it('离开 takeover 模式时取消所有推送', async () => {
+      const pushService = new PushService('https://push.example.com', 'test-key', 'gw-1');
+      const pushSpy = vi.spyOn(pushService, 'sendPush').mockReturnValue(
+        new Promise(() => {}),
+      );
+      const handlerWithPush = new HookHandler(
+        sessionStore, pendingStore, deviceStore, wsBus, eventLogger, pushService,
+      );
+      handlerWithPush.setStreamManager(streamManager);
+
+      deviceStore.register('ios-device', 'ios', 'en');
+      deviceStore.setPushToken('ios-device', 'token-abc', 'sandbox');
+      deviceStore.setConnected('ios-device', false);
+      handlerWithPush.setMode('takeover', 'ios-device');
+
+      // 发送交互事件
+      handlerWithPush.handleEvent(
+        makeEvent('PermissionRequest', 's1', { tool_name: 'Bash' }),
+      );
+
+      await vi.waitFor(() => { expect(pushSpy).toHaveBeenCalled(); }, { timeout: 2000 });
+      const signal = pushSpy.mock.calls[0][2] as AbortSignal;
+      expect(signal.aborted).toBe(false);
+
+      // 切换到 bystander 应该取消所有推送
+      handlerWithPush.setMode('bystander');
+
+      expect(signal.aborted).toBe(true);
     });
   });
 });

@@ -100,6 +100,8 @@ export class HookHandler {
     }
     this._processing = true;
 
+    let pendingRequest: { sessionId: string; eventId: string; event: SSEHookEvent } | null = null;
+
     try {
       let event: RawHookEvent;
       try {
@@ -141,6 +143,14 @@ export class HookHandler {
         event: hookEvent,
       };
 
+      // Send push notification before pipeline push — time-sensitive.
+      // Pipeline backpressure must not delay push delivery.
+      const isInteractive = this.mode === 'takeover' && (isUserInteractionEvent(eventName) || isInteractivePreToolUse(eventName, hookEvent));
+      if (isInteractive) {
+        this.trySendPush(sessionId, eventId, hookEvent);
+        pendingRequest = { sessionId, eventId, event: hookEvent };
+      }
+
       if (this.streamManager) {
         if (!this.streamManager.push(sessionMsg)) {
           throw new HttpError('Service Unavailable — pipeline backpressured', 503);
@@ -160,24 +170,23 @@ export class HookHandler {
         this.streamManager?.startSession(agentId, agentTranscriptPath);
       }
 
-      if (this.mode === 'takeover' && (isUserInteractionEvent(eventName) || isInteractivePreToolUse(eventName, hookEvent))) {
-        this.trySendPush(sessionId, eventId, eventName, hookEvent);
-
-        return this.pendingStore.waitForResponse(sessionId, eventId, hookEvent);
-      }
-
       if (eventName === 'SessionEnd') {
         this.deleteSession(sessionId);
-        return {};
       }
-
-      return {};
     } finally {
       this._processing = false;
       const resolvers = this._nextResolvers;
       this._nextResolvers = [];
       for (const r of resolvers) r();
     }
+
+    // Wait for user response OUTSIDE the serialization lock so subsequent
+    // hook events (and their pushes) are not blocked while the user decides.
+    if (pendingRequest) {
+      return this.pendingStore.waitForResponse(pendingRequest.sessionId, pendingRequest.eventId, pendingRequest.event);
+    }
+
+    return {};
   }
 
   private _registerAndBroadcastNewSession(sessionId: string): void {
@@ -198,7 +207,25 @@ export class HookHandler {
     this.historyCache = null;
   }
 
+  private cancelPushesForSession(sessionId: string): void {
+    const prefix = `${sessionId}:`;
+    for (const [key, controller] of this.activePushControllers) {
+      if (key.startsWith(prefix)) {
+        controller.abort();
+        this.activePushControllers.delete(key);
+      }
+    }
+  }
+
+  private cancelAllPushes(): void {
+    for (const controller of this.activePushControllers.values()) {
+      controller.abort();
+    }
+    this.activePushControllers.clear();
+  }
+
   deleteSession(sessionId: string): void {
+    this.cancelPushesForSession(sessionId);
     this.broadcastAll({ type: 'session_end', sessionId });
     this.sessionStore.unregister(sessionId);
     this.pendingStore.releaseSession(sessionId);
@@ -209,6 +236,7 @@ export class HookHandler {
     if (this.mode === mode && this.takeoverOwner === deviceId) return;
     if (this.mode === 'takeover' && (mode === 'bystander' || (mode === 'takeover' && this.takeoverOwner !== deviceId))) {
       this.pendingStore.releaseAll();
+      this.cancelAllPushes();
       this.takeoverOwner = null;
     }
     if (mode === 'takeover') {
@@ -250,8 +278,9 @@ export class HookHandler {
   private static readonly DEDUP_WINDOW_MS = 2000;
   private static readonly STALE_THRESHOLD_MS = 20_000;
   private recentPushes = new Map<string, number>();
+  private activePushControllers = new Map<string, AbortController>();
 
-  private trySendPush(sessionId: string, eventId: string, eventName: string, event: SSEHookEvent): void {
+  private trySendPush(sessionId: string, eventId: string, event: SSEHookEvent): void {
     if (!this.pushService) {
       console.log('[Push] skip: pushService not configured');
       return;
@@ -281,30 +310,34 @@ export class HookHandler {
     }
 
     const now = Date.now();
-    const dedupKey = `${eventName}:${event.tool_name ?? ''}`;
+    const dedupKey = `${event.event_name}:${event.tool_name ?? ''}`;
     const last = this.recentPushes.get(dedupKey);
     if (last !== undefined && now - last < HookHandler.DEDUP_WINDOW_MS) {
       console.log('[Push] skip: dedup %s (%dms ago)', dedupKey, now - last);
       return;
     }
     this.recentPushes.set(dedupKey, now);
-    // Clean stale entries
     if (this.recentPushes.size > 20) {
       for (const [k, t] of this.recentPushes) {
         if (now - t > HookHandler.DEDUP_WINDOW_MS * 2) this.recentPushes.delete(k);
       }
     }
 
-    console.log('[Push] sending push to device %s for event %s/%s', takeoverDevice.deviceId, eventName, eventId);
+    const controller = new AbortController();
+    const controllerKey = `${sessionId}:${eventId}`;
+    this.activePushControllers.set(controllerKey, controller);
+
+    console.log('[Push] sending push to device %s for event %s/%s', takeoverDevice.deviceId, event.event_name, eventId);
     this.pushService.sendPush(takeoverDevice.pushToken, {
       sessionId,
       eventId,
-      eventName: eventName as HookEventName,
+      eventName: event.event_name as HookEventName,
       toolName: event.tool_name as string | undefined,
       content: extractContent(event.tool_input),
       locale: takeoverDevice.locale,
       environment: takeoverDevice.pushEnvironment,
-    }).then((result) => {
+    }, controller.signal).then((result) => {
+      this.activePushControllers.delete(controllerKey);
       if (!result.ok) {
         console.error('[Push] relay returned failure');
         if (result.reason === 'unregistered') {
@@ -315,6 +348,7 @@ export class HookHandler {
         }
       }
     }).catch((err) => {
+      this.activePushControllers.delete(controllerKey);
       console.error('[Push] send failed:', err instanceof Error ? err.message : err);
     });
   }

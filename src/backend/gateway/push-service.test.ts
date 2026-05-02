@@ -70,12 +70,12 @@ describe('PushService', () => {
       };
 
       const promise = pushService.sendPush('device-token-123', payload);
-      // Advance past all retry delays: 0ms delay + 1000ms + 2000ms + 4000ms
-      await vi.advanceTimersByTimeAsync(10_000);
+      // Advance past the retry delay: 0ms delay + 1000ms
+      await vi.advanceTimersByTimeAsync(5_000);
       const result = await promise;
 
       expect(result).toEqual({ ok: false });
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     it('returns false when response is not ok (after retries)', async () => {
@@ -88,11 +88,11 @@ describe('PushService', () => {
       };
 
       const promise = pushService.sendPush('device-token-123', payload);
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(5_000);
       const result = await promise;
 
       expect(result).toEqual({ ok: false });
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     it.each([429, 401])('does not retry on %i', async (status) => {
@@ -107,6 +107,65 @@ describe('PushService', () => {
       const result = await pushService.sendPush('device-token-123', payload);
 
       expect(result).toEqual({ ok: false });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('sendPush with AbortController', () => {
+    it('returns false early when signal is already aborted', async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      const payload: PushPayload = {
+        sessionId: 's1',
+        eventId: 'e1',
+        eventName: 'Stop',
+      };
+
+      const result = await pushService.sendPush('token', payload, controller.signal);
+
+      expect(result).toEqual({ ok: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('stops retrying when signal is aborted mid-retry', async () => {
+      fetchMock.mockRejectedValue(new Error('Network error'));
+
+      const controller = new AbortController();
+      const payload: PushPayload = {
+        sessionId: 's1',
+        eventId: 'e1',
+        eventName: 'Stop',
+      };
+
+      const promise = pushService.sendPush('token', payload, controller.signal);
+
+      // Abort after the first attempt (which happens immediately)
+      // vi.useFakeTimers so we can control timing
+      await vi.advanceTimersByTimeAsync(500);
+      controller.abort();
+
+      // Advance past the first retry delay (1000ms); should have exited early
+      await vi.advanceTimersByTimeAsync(2000);
+      const result = await promise;
+
+      expect(result).toEqual({ ok: false });
+      // Should only have 1 attempt (the initial one), not 3 retries
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('succeeds when signal is provided but not aborted', async () => {
+      const controller = new AbortController();
+
+      const payload: PushPayload = {
+        sessionId: 's1',
+        eventId: 'e1',
+        eventName: 'Stop',
+      };
+
+      const result = await pushService.sendPush('token', payload, controller.signal);
+
+      expect(result).toEqual({ ok: true });
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });

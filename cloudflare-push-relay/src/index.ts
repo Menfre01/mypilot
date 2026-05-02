@@ -27,6 +27,7 @@ interface AutoRegisterRequest {
 }
 
 interface PushRequest {
+  gatewayId: string;
   deviceToken: string;
   environment?: string;
   payload: {
@@ -34,6 +35,7 @@ interface PushRequest {
       alert: { title: string; body: string };
       sound: string;
       badge: number;
+      category?: string;
     };
     session_id: string;
     event_id: string;
@@ -265,17 +267,12 @@ async function handleVerify(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ error: 'Authorization required' }, 401);
   }
 
-  const email = await env.PUSH_KV.get(`apikey:${apiKey}`);
-  if (!email) {
+  const verified = await verifyApiKey(env, apiKey);
+  if (!verified) {
     return jsonResponse({ error: 'Invalid API key' }, 401);
   }
 
-  const userData = await env.PUSH_KV.get(`user:${email}`, 'json');
-  if (!userData) {
-    return jsonResponse({ error: 'User not found' }, 404);
-  }
-
-  const user = userData as UserRecord;
+  const { user } = verified;
   return jsonResponse({
     ok: true,
     email: user.email,
@@ -334,7 +331,7 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
   console.log(`[PushRelay] Device token: ${body.deviceToken?.substring(0, 8)}***`);
   console.log(`[PushRelay] Payload: ${JSON.stringify(body.payload?.aps?.alert)}`);
 
-  if (!body.deviceToken || !body.payload) {
+  if (!body.deviceToken || !body.payload || !body.gatewayId) {
     console.log('[PushRelay] Missing required fields');
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
@@ -346,6 +343,12 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
   }
   const { user, storageKey } = verified;
   console.log(`[PushRelay] User: ${user.email ?? user.gatewayId}, Plan: ${user.plan}`);
+
+  // Cross-validate gatewayId matches the API key's gateway
+  if (user.gatewayId && user.gatewayId !== body.gatewayId) {
+    console.log(`[PushRelay] gatewayId mismatch: request=${body.gatewayId} key=${user.gatewayId}`);
+    return jsonResponse({ error: 'Gateway ID mismatch' }, 403);
+  }
 
   const identity = user.email || user.gatewayId || '';
 
@@ -368,10 +371,12 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
       }, 429);
     }
 
-    // Defer counter increment until after successful APNs push
+    // Pre-increment counter to close race window between read and APNs call
+    await env.PUSH_KV.put(counterKey, JSON.stringify({ count: count + 1 }), {
+      expirationTtl: 86400 * 2,
+    });
   }
 
-  // Send push notification via APNs.
   // If the reported environment fails with 400 (BadDeviceToken), try the
   // other environment — the buggy app may misreport sandbox for production.
   const reportedEnv = body.environment ?? 'sandbox';
@@ -390,27 +395,17 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
   }
 
   if (result.ok) {
-    user.pushCount++;
-    await env.PUSH_KV.put(storageKey, JSON.stringify(user));
-
-    // Increment daily counter only on success
     if (user.plan === 'free') {
-      const today = new Date().toISOString().slice(0, 10);
-      const counterKey = `counter:${identity}:${today}`;
-      const counterData = await env.PUSH_KV.get(counterKey, 'json');
-      const count = counterData ? (counterData as { count: number }).count : 0;
-      await env.PUSH_KV.put(counterKey, JSON.stringify({ count: count + 1 }), {
-        expirationTtl: 86400 * 2,
-      });
+      user.pushCount++;
+      await env.PUSH_KV.put(storageKey, JSON.stringify(user));
     }
-  } else {
-    // Clean up invalid device tokens
-    if (result.apnsStatus === 410) {
-      console.log('[PushRelay] Device token unregistered (410), removing from KV');
-      await env.PUSH_KV.delete(`token:${body.deviceToken}`);
-    } else if (result.apnsStatus === 400) {
-      console.error('[PushRelay] APNs rejected push (400 BadDeviceToken): %s', result.apnsBody);
-    }
+  } else if (result.apnsStatus === 410) {
+    console.log('[PushRelay] Device token unregistered (410), removing from KV');
+    await env.PUSH_KV.delete(`token:${body.deviceToken}`);
+  } else if (result.apnsStatus === 400) {
+    console.error('[PushRelay] APNs rejected push (400 BadDeviceToken): %s', result.apnsBody);
+  } else if (!result.ok) {
+    console.warn('[PushRelay] Push failed with unhandled APNs status=%s body=%s', result.apnsStatus, result.apnsBody);
   }
 
   return jsonResponse({
@@ -520,6 +515,25 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
+const unixNow = () => Math.floor(Date.now() / 1000);
+
+function apnsExpirationForEvent(eventName: string, toolName?: string): number | undefined {
+  switch (eventName) {
+    case 'PermissionRequest':
+    case 'Stop':
+    case 'SubagentStop':
+    case 'Elicitation':
+      return unixNow() + 300;
+    case 'PreToolUse':
+      if (toolName === 'AskUserQuestion' || toolName === 'ExitPlanMode') {
+        return unixNow() + 300;
+      }
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
 async function sendAPNsPush(
   env: Env,
   deviceToken: string,
@@ -535,6 +549,7 @@ async function sendAPNsPush(
       : 'https://api.push.apple.com';
     const apnsUrl = `${apnsHost}/3/device/${deviceToken}`;
 
+    const expiration = apnsExpirationForEvent(payload.event_name, payload.tool_name);
     const response = await fetch(apnsUrl, {
       method: 'POST',
       headers: {
@@ -543,6 +558,7 @@ async function sendAPNsPush(
         'apns-push-type': 'alert',
         'apns-priority': '10',
         'content-type': 'application/json',
+        ...(expiration !== undefined ? { 'apns-expiration': String(expiration) } : {}),
       },
       body: JSON.stringify(payload),
     });

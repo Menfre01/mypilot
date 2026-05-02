@@ -42,13 +42,13 @@ export class PushService {
     return false;
   }
 
-  async sendPush(deviceToken: string, payload: PushPayload): Promise<SendResult> {
+  async sendPush(deviceToken: string, payload: PushPayload, signal?: AbortSignal): Promise<SendResult> {
     const { title, body } = buildNotification(payload);
 
     const category = categoryForEvent(payload.eventName);
     console.log('[PushService] event=%s category=%s', payload.eventName, category ?? 'none');
 
-    return this.sendWithRetry(deviceToken, title, body, category, payload);
+    return this.sendWithRetry(deviceToken, title, body, category, payload, signal);
   }
 
   private async sendWithRetry(
@@ -57,9 +57,11 @@ export class PushService {
     body: string,
     category: string | null,
     payload: PushPayload,
+    signal?: AbortSignal,
   ): Promise<SendResult> {
-    const maxRetries = 3;
+    const maxRetries = 2;
     const baseDelay = 1000;
+    const fetchTimeoutMs = 8_000;
 
     const env = payload.environment ?? 'undefined';
     console.log('[PushService] sending to relay: env=%s token=%s***', env, deviceToken.slice(0, 8));
@@ -84,14 +86,29 @@ export class PushService {
     });
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (signal?.aborted) {
+        console.log('[PushService] Push cancelled before attempt %d', attempt);
+        return { ok: false };
+      }
+
       if (attempt > 0) {
         const delay = baseDelay * Math.pow(2, attempt - 1);
         console.log('[PushService] retry %d/%d in %dms', attempt, maxRetries - 1, delay);
-        await sleep(delay);
+        const slept = await sleepWithAbort(delay, signal);
+        if (!slept) {
+          console.log('[PushService] Push cancelled during retry delay');
+          return { ok: false };
+        }
       }
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15_000);
+      const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs);
+
+      let onAbort: (() => void) | undefined;
+      if (signal) {
+        onAbort = () => controller.abort();
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
 
       try {
         const response = await fetch(`${this.relayUrl}/api/push`, {
@@ -151,6 +168,9 @@ export class PushService {
         }
       } finally {
         clearTimeout(timeout);
+        if (signal && onAbort) {
+          signal.removeEventListener('abort', onAbort);
+        }
       }
     }
 
@@ -218,8 +238,19 @@ function truncateTail(text: string, maxLen: number): string {
   return text.slice(0, maxLen - 1) + '…';
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<boolean> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms)).then(() => true);
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve(true);
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 async function readFirstBytes(response: Response, maxBytes: number): Promise<string> {
