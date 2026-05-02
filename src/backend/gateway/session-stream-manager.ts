@@ -11,6 +11,7 @@ export class SessionStreamManager {
   private tailers = new Map<string, TranscriptTailer>();
   private tailerPaths = new Map<string, string>();
   private _nextSeq = 0;
+  private isHidden: (sessionId: string) => boolean;
 
   constructor(
     eventLogger: EventLogger,
@@ -19,8 +20,10 @@ export class SessionStreamManager {
       pipelineCapacity?: number;
       pipelineHighWatermark?: number;
       pipelineLowWatermark?: number;
+      isHidden?: (sessionId: string) => boolean;
     },
   ) {
+    this.isHidden = options?.isHidden ?? (() => false);
     this.eventLogger = eventLogger;
     this.wsBus = wsBus;
     this.pipeline = new MessagePipeline({
@@ -86,10 +89,12 @@ export class SessionStreamManager {
   }
 
   getAllTranscriptEntries(): SessionMessage[] {
-    return this.pipeline.getAllTranscriptEntries();
+    return this.pipeline.getAllTranscriptEntries()
+      .filter(m => !this.isHidden(m.sessionId));
   }
 
   broadcastMessage(msg: SessionMessage, targetDeviceId?: string): void {
+    if (this.isHidden(msg.sessionId)) return;
     if (msg.source === 'hook' && msg.event) {
       this.wsBus.broadcast({ type: 'event', sessionId: msg.sessionId, event: msg.event }, targetDeviceId);
     } else if (msg.source === 'transcript' && msg.entry) {

@@ -650,16 +650,19 @@ describe('HookHandler', () => {
       expect(spy).toHaveBeenCalledWith('agent-001', '/tmp/agent-transcript.jsonl');
     });
 
-    it('SubagentStop 为新 agent_id 注册会话', async () => {
+    it('SubagentStop 将 agent 标记为隐藏并注册到 SessionStore（用于清理追踪）', async () => {
+      const hiddenSpy = vi.spyOn(sessionStore, 'markHidden');
+
       await handler.handleEvent(makeEvent('SubagentStop', 's1', {
         agent_id: 'agent-002',
         agent_transcript_path: '/tmp/agent-transcript.jsonl',
       }));
 
+      expect(hiddenSpy).toHaveBeenCalledWith('agent-002');
       expect(sessionStore.has('agent-002')).toBe(true);
     });
 
-    it('SubagentStop 为新 agent 会话广播 session_start', async () => {
+    it('SubagentStop 不广播 agent 的 session_start', async () => {
       const broadcasts = captureBroadcasts(wsBus);
 
       await handler.handleEvent(makeEvent('SubagentStop', 's1', {
@@ -670,11 +673,12 @@ describe('HookHandler', () => {
       const agentStartMsg = broadcasts.find((m) =>
         m.type === 'session_start' && (m as { session: { id: string } }).session.id === 'agent-003',
       );
-      expect(agentStartMsg).toBeDefined();
+      expect(agentStartMsg).toBeUndefined();
+      expect(sessionStore.has('agent-003')).toBe(true);
     });
 
-    it('重复 SubagentStop 不重复广播 agent 的 session_start', async () => {
-      const broadcasts = captureBroadcasts(wsBus);
+    it('重复 SubagentStop 幂等标记隐藏', async () => {
+      const spy = vi.spyOn(sessionStore, 'markHidden');
 
       await handler.handleEvent(makeEvent('SubagentStop', 's1', {
         agent_id: 'agent-004',
@@ -685,10 +689,7 @@ describe('HookHandler', () => {
         agent_transcript_path: '/tmp/agent-transcript.jsonl',
       }));
 
-      const startMsgs = broadcasts.filter((m) =>
-        m.type === 'session_start' && (m as { session: { id: string } }).session.id === 'agent-004',
-      );
-      expect(startMsgs).toHaveLength(1);
+      expect(spy).toHaveBeenCalledTimes(2);
     });
 
     it('SubagentStart 没有 agent_transcript_path 时不启动子代理 tailer', async () => {

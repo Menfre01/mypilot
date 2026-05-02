@@ -13,6 +13,8 @@ export const SESSION_COLORS = [
 
 export class SessionStore {
   private sessions = new Map<string, SessionInfo>();
+  private lastActivityAt = new Map<string, number>();
+  private hiddenIds = new Set<string>();
   private colorCounter = 0;
 
   register(sessionId: string): SessionInfo {
@@ -27,20 +29,52 @@ export class SessionStore {
       startedAt: Date.now(),
     };
     this.sessions.set(sessionId, info);
+    this.lastActivityAt.set(sessionId, Date.now());
     this.colorCounter++;
     return info;
   }
 
+  touch(sessionId: string): void {
+    if (this.sessions.has(sessionId)) {
+      this.lastActivityAt.set(sessionId, Date.now());
+    }
+  }
+
   unregister(sessionId: string): void {
     this.sessions.delete(sessionId);
+    this.lastActivityAt.delete(sessionId);
+    this.hiddenIds.delete(sessionId);
+  }
+
+  getStaleIds(thresholdMs: number): string[] {
+    const now = Date.now();
+    const stale: string[] = [];
+    for (const [id, lastSeen] of this.lastActivityAt) {
+      if (now - lastSeen > thresholdMs) {
+        stale.push(id);
+      }
+    }
+    return stale;
   }
 
   get(sessionId: string): SessionInfo | undefined {
     return this.sessions.get(sessionId);
   }
 
-  getAll(): SessionInfo[] {
-    return Array.from(this.sessions.values());
+  markHidden(sessionId: string): void {
+    if (this.sessions.has(sessionId)) {
+      this.hiddenIds.add(sessionId);
+    }
+  }
+
+  isHidden(sessionId: string): boolean {
+    return this.hiddenIds.has(sessionId);
+  }
+
+  getAll(includeHidden = false): SessionInfo[] {
+    const all = Array.from(this.sessions.values());
+    if (includeHidden) return all;
+    return all.filter(s => !this.hiddenIds.has(s.id));
   }
 
   has(sessionId: string): boolean {

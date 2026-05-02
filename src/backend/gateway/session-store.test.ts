@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { SessionStore, SESSION_COLORS } from "./session-store.js";
 
 describe("SessionStore", () => {
@@ -77,5 +77,109 @@ describe("SessionStore", () => {
     expect(store.has("session-x")).toBe(true);
     store.unregister("session-x");
     expect(store.has("session-x")).toBe(false);
+  });
+
+  it("touch updates last activity time", () => {
+    const store = new SessionStore();
+    store.register("s1");
+
+    vi.useFakeTimers();
+    const storeAny = store as unknown as { lastActivityAt: Map<string, number> };
+    storeAny.lastActivityAt.set("s1", Date.now() - 60_000);
+
+    store.touch("s1");
+    expect(storeAny.lastActivityAt.get("s1")).toBe(Date.now());
+
+    vi.useRealTimers();
+  });
+
+  it("touch is no-op for non-existent session", () => {
+    const store = new SessionStore();
+    expect(() => store.touch("no-such-session")).not.toThrow();
+  });
+
+  it("getStaleIds returns sessions inactive beyond threshold", () => {
+    vi.useFakeTimers();
+    const store = new SessionStore();
+    const storeAny = store as unknown as { lastActivityAt: Map<string, number> };
+
+    store.register("fresh");
+    store.register("stale-1");
+    store.register("stale-2");
+
+    storeAny.lastActivityAt.set("stale-1", Date.now() - 31 * 60_000);
+    storeAny.lastActivityAt.set("stale-2", Date.now() - 60 * 60_000);
+
+    const stale = store.getStaleIds(30 * 60_000);
+    expect(stale.sort()).toEqual(["stale-1", "stale-2"]);
+
+    vi.useRealTimers();
+  });
+
+  it("unregister cleans up lastActivityAt", () => {
+    const store = new SessionStore();
+    const storeAny = store as unknown as { lastActivityAt: Map<string, number> };
+
+    store.register("s1");
+    expect(storeAny.lastActivityAt.has("s1")).toBe(true);
+
+    store.unregister("s1");
+    expect(storeAny.lastActivityAt.has("s1")).toBe(false);
+  });
+
+  it("markHidden excludes session from getAll by default", () => {
+    const store = new SessionStore();
+    store.register("parent");
+    store.register("child");
+    store.markHidden("child");
+
+    const visible = store.getAll();
+    expect(visible).toHaveLength(1);
+    expect(visible[0].id).toBe("parent");
+  });
+
+  it("getAll with includeHidden=true returns all sessions", () => {
+    const store = new SessionStore();
+    store.register("parent");
+    store.register("child");
+    store.markHidden("child");
+
+    const all = store.getAll(true);
+    expect(all).toHaveLength(2);
+    expect(all.map(s => s.id).sort()).toEqual(["child", "parent"]);
+  });
+
+  it("markHidden is no-op for non-existent session", () => {
+    const store = new SessionStore();
+    store.markHidden("ghost");
+    expect(store.getAll()).toHaveLength(0);
+  });
+
+  it("unregister cleans up hiddenIds", () => {
+    const store = new SessionStore();
+    store.register("child");
+    store.markHidden("child");
+    store.unregister("child");
+
+    store.register("child");
+    expect(store.getAll()).toHaveLength(1);
+  });
+
+  it("isHidden returns true for hidden session", () => {
+    const store = new SessionStore();
+    store.register("s1");
+    store.markHidden("s1");
+    expect(store.isHidden("s1")).toBe(true);
+  });
+
+  it("isHidden returns false for visible session", () => {
+    const store = new SessionStore();
+    store.register("s1");
+    expect(store.isHidden("s1")).toBe(false);
+  });
+
+  it("isHidden returns false for non-existent session", () => {
+    const store = new SessionStore();
+    expect(store.isHidden("ghost")).toBe(false);
   });
 });

@@ -116,6 +116,7 @@ export class HookHandler {
       const eventName = event.hook_event_name;
 
       this._registerAndBroadcastNewSession(sessionId);
+      this.sessionStore.touch(sessionId);
 
       const seq = this.streamManager?.nextSeqFn() ?? 0;
       const eventId = seq.toString(36);
@@ -146,20 +147,16 @@ export class HookHandler {
         }
       }
 
-      // 任意携带 transcript_path 的事件幂等启动 tailer，SessionEnd 回收
       if (transcriptPath) {
         this.streamManager?.startSession(sessionId, transcriptPath);
       }
-      if (eventName === 'SessionEnd') {
-        this.streamManager?.stopSession(sessionId);
-      }
 
-      // 子代理 transcript（agent_transcript_path + agent_id）
-      // SubagentStop 事件携带 agent_transcript_path，用于启动子代理 tailer
       const agentTranscriptPath = event.agent_transcript_path as string | undefined;
       const agentId = event.agent_id as string | undefined;
       if (agentTranscriptPath && agentId) {
-        this._registerAndBroadcastNewSession(agentId);
+        this.sessionStore.register(agentId);
+        this.sessionStore.touch(agentId);
+        this.sessionStore.markHidden(agentId);
         this.streamManager?.startSession(agentId, agentTranscriptPath);
       }
 
@@ -205,6 +202,7 @@ export class HookHandler {
     this.broadcastAll({ type: 'session_end', sessionId });
     this.sessionStore.unregister(sessionId);
     this.pendingStore.releaseSession(sessionId);
+    this.streamManager?.stopSession(sessionId);
   }
 
   setMode(mode: GatewayMode, deviceId?: string): void {

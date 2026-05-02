@@ -188,8 +188,8 @@ describe('transcript-reader', () => {
       expect(result.entries[0].model).toBe('robust-model');
     });
 
-    it('truncates thinking to 300 chars', async () => {
-      const longThinking = 'A'.repeat(500);
+    it('truncates thinking to 1000 chars', async () => {
+      const longThinking = 'A'.repeat(1500);
       const path = setupTranscript([
         makeTranscriptLine({
           type: 'assistant',
@@ -206,12 +206,12 @@ describe('transcript-reader', () => {
 
       const result = await readTranscript(path);
       const thinking = result.entries[0].blocks.find((b) => b.type === 'thinking')!;
-      expect(thinking.thinking!.length).toBeLessThanOrEqual(300);
+      expect(thinking.thinking!.length).toBeLessThanOrEqual(1000);
       expect(thinking.thinking!.length).toBeGreaterThan(0);
     });
 
-    it('truncates text to 500 chars', async () => {
-      const longText = 'B'.repeat(600);
+    it('truncates text to 10000 chars', async () => {
+      const longText = 'B'.repeat(12000);
       const path = setupTranscript([
         makeTranscriptLine({
           type: 'assistant',
@@ -225,12 +225,12 @@ describe('transcript-reader', () => {
 
       const result = await readTranscript(path);
       const text = result.entries[0].blocks.find((b) => b.type === 'text')!;
-      expect(text.text!.length).toBeLessThanOrEqual(500);
+      expect(text.text!.length).toBeLessThanOrEqual(10000);
       expect(text.text!.length).toBeGreaterThan(0);
     });
 
-    it('truncates tool_result to 1000 chars', async () => {
-      const longResult = 'C'.repeat(1500);
+    it('truncates tool_result to 4000 chars', async () => {
+      const longResult = 'C'.repeat(6000);
       const path = setupTranscript([
         makeTranscriptLine({
           type: 'user',
@@ -242,7 +242,7 @@ describe('transcript-reader', () => {
 
       const result = await readTranscript(path);
       const toolResult = result.entries[0].blocks.find((b) => b.type === 'tool_result')!;
-      expect(toolResult.content!.length).toBeLessThanOrEqual(1000);
+      expect(toolResult.content!.length).toBeLessThanOrEqual(4000);
       expect(toolResult.content!.length).toBeGreaterThan(0);
     });
 

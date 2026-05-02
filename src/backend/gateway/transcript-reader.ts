@@ -2,9 +2,9 @@ import { open, stat } from 'node:fs/promises';
 import type { TranscriptEntry, TranscriptBlock, TokenUsage } from '../../shared/protocol.js';
 
 const TAIL_BYTES = 65536;
-const THINKING_MAX_CHARS = 300;
-const TEXT_MAX_CHARS = 500;
-const TOOL_RESULT_MAX_CHARS = 1000;
+const THINKING_MAX_CHARS = 1000;
+const TEXT_MAX_CHARS = 10000;
+const TOOL_RESULT_MAX_CHARS = 4000;
 
 type JsonEntry = Record<string, unknown>;
 

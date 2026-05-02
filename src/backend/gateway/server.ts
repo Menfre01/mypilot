@@ -103,7 +103,9 @@ export function createServer(
     persistState,
   );
 
-  const sessionStreamManager = new SessionStreamManager(eventLogger, wsBus);
+  const sessionStreamManager = new SessionStreamManager(eventLogger, wsBus, {
+    isHidden: (id) => sessionStore.isHidden(id),
+  });
   sessionStreamManager.recoverSeq(eventLogger);
   hookHandler.setStreamManager(sessionStreamManager);
 
@@ -118,6 +120,9 @@ export function createServer(
   }
 
   sessionStreamManager.onDrain(drainPipeline);
+
+  const SESSION_STALE_MS = 30 * 60_000;
+  const staleCleanup = setInterval(cleanupStaleSessions, 60_000);
 
   let httpServer: Server;
 
@@ -176,6 +181,14 @@ export function createServer(
 
     res.writeHead(404, CORS_HEADERS);
     res.end('Not Found');
+  }
+
+  function cleanupStaleSessions(): void {
+    const staleIds = sessionStore.getStaleIds(SESSION_STALE_MS);
+    for (const id of staleIds) {
+      console.log('[Session] cleaning up stale session %s (inactive > %d min)', id, SESSION_STALE_MS / 60_000);
+      hookHandler.deleteSession(id);
+    }
   }
 
   function broadcastSessionState(lastEventSeq?: number, targetDeviceId?: string, cachedEvents?: ReturnType<typeof getRecentEvents>): void {
@@ -275,6 +288,7 @@ export function createServer(
     },
 
     async stop(): Promise<void> {
+      clearInterval(staleCleanup);
       sessionStreamManager.shutdown();
       pendingStore.releaseAll();
       await wsBus.close();
