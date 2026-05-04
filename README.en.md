@@ -10,8 +10,6 @@ Gateway server for [MyPilot](https://apps.apple.com/hk/app/mypilot/id6762133874)
 </div>
 
 > **Download MyPilot** — iOS: [App Store](https://apps.apple.com/app/mypilot) in most regions (not available in mainland China). Users in mainland China can join via [TestFlight](https://testflight.apple.com/join/gU2Tw8Hg). Android: [GitHub Releases](https://github.com/Menfre01/mypilot/releases) APK.
->
-> **Try it online** — No gateway deployment needed. Download the app and scan the QR code from the [Demo Gateway](https://mypilot-demo-gateway.menfre.workers.dev/) to explore all features.
 
 MyPilot receives Claude Code hook events and streams them to your phone via WebSocket. In takeover mode, you can approve/deny permissions, answer questions, and submit prompts from your phone.
 
@@ -34,6 +32,9 @@ MyPilot receives Claude Code hook events and streams them to your phone via WebS
 ## Quick Start
 
 ```bash
+# 0. Make sure Claude Code is installed and logged in
+claude --version
+
 # 1. Install
 npm install -g mypilot
 
@@ -44,7 +45,9 @@ mypilot init-hooks
 mypilot start
 ```
 
-Scan the QR code displayed in your terminal with the MyPilot app on your iPhone. The QR code contains the gateway address and encryption key — everything needed for a secure connection.
+Scan the QR code displayed in your terminal with the MyPilot app on your phone. The QR code contains the gateway address and encryption key — everything needed for a secure connection.
+
+> **Tip**: If `npm install -g` fails with a permissions error, try `npm install -g mypilot --prefix ~/.local` or see the [npm docs](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally). Push notifications are auto-registered on first start — no extra setup required.
 
 ## Architecture
 
@@ -217,9 +220,7 @@ When multiple devices are connected, takeover is exclusive — only one device c
 
 ## Pairing
 
-When you start the gateway, a QR code is displayed in the terminal. Open the MyPilot app and scan it to connect.
-
-If you need to reconnect later (e.g., app was closed), run:
+If you need to get the QR code again (e.g., switched phones or app was closed), run:
 
 ```bash
 mypilot pair-info
@@ -229,7 +230,7 @@ This displays the pairing QR code and connection details (IP, port, key) without
 
 ### NAT Traversal
 
-If your iPhone is not on the same LAN (e.g., using a tunnel service like frp, ngrok, Cloudflare Tunnel), add a tunnel link:
+If your phone is not on the same LAN (e.g., using a tunnel service like frp, ngrok, Cloudflare Tunnel), add a tunnel link:
 
 ```bash
 mypilot link add tunnel wss://tunnel.example.com --label "My Tunnel"
@@ -241,7 +242,7 @@ The QR code will automatically include the tunnel address, allowing the iOS app 
 
 ```bash
 docker compose build
-# Set LAN_IP to your machine's local IP (the iPhone must be on the same network)
+# Set LAN_IP to your machine's local IP (the phone must be on the same network)
 LAN_IP=192.168.x.x docker compose up -d
 ```
 
@@ -270,7 +271,7 @@ npm run docker:restart   # Rebuild & restart
 | Problem | Solution |
 |---------|----------|
 | Gateway won't start | Check if already running: `mypilot status`. Kill stale process if needed. |
-| QR code won't scan | Ensure iPhone and computer are on the same WiFi network. Try `mypilot pair-info` for a fresh QR code. |
+| QR code won't scan | Ensure your phone and computer are on the same WiFi network. Try `mypilot pair-info` for a fresh QR code. |
 | App can't connect | Check firewall settings. Port 16321 must be open on your machine. |
 | Hooks not firing | Verify hooks are in `~/.claude/settings.json`. Run `mypilot init-hooks` to reconfigure. |
 | Wrong IP in QR code | Set `LAN_IP` env var or run `mypilot pair-info` after starting the gateway. For remote access, use `mypilot link add tunnel <url>` to add a tunnel link. |

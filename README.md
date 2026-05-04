@@ -10,8 +10,6 @@
 </div>
 
 > **下载 MyPilot** — iOS 版已在 [App Store](https://apps.apple.com/hk/app/mypilot/id6762133874) 海外各大区上架（中国大陆区暂不可用）。大陆用户可通过 [TestFlight](https://testflight.apple.com/join/gU2Tw8Hg) 体验。Android 版可在 [GitHub Releases](https://github.com/Menfre01/mypilot/releases) 下载 APK。
->
-> **在线体验** — 无需部署网关，下载 App 后直接扫描 [Demo Gateway](https://mypilot-demo-gateway.menfre.workers.dev/) 的二维码即可体验完整功能。
 
 MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你的手机。在接管模式下，你可以直接在手机上审批权限、回答问题、提交 Prompt。
 
@@ -34,6 +32,9 @@ MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你
 ## 快速开始
 
 ```bash
+# 0. 确认 Claude Code 已安装并登录
+claude --version
+
 # 1. 安装
 npm install -g mypilot
 
@@ -44,7 +45,9 @@ mypilot init-hooks
 mypilot start
 ```
 
-用 iPhone 上的 MyPilot 应用扫描终端中显示的二维码。二维码包含网关地址和加密密钥，连接所需的一切信息都在其中。
+用手机上的 MyPilot 应用扫描终端中显示的二维码。二维码包含网关地址和加密密钥，连接所需的一切信息都在其中。
+
+> **提示**：`npm install -g` 如遇权限错误，可改用 `npm install -g mypilot --prefix ~/.local` 或参考 [npm 官方指南](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally)。推送通知在首次启动时自动注册，无需额外配置。
 
 ## 架构
 
@@ -217,9 +220,7 @@ mypilot push disable                   # 禁用推送通知
 
 ## 配对
 
-启动网关时，终端会显示二维码。打开 MyPilot 应用扫描即可连接。
-
-如需重新连接（例如应用已关闭），运行：
+如需重新获取二维码（例如换了手机或应用已关闭），运行：
 
 ```bash
 mypilot pair-info
@@ -229,7 +230,7 @@ mypilot pair-info
 
 ### NAT 穿透
 
-如果你的 iPhone 不在同一局域网（例如使用了 frp、ngrok、Cloudflare Tunnel 等隧道服务），请添加隧道连接：
+如果你的手机不在同一局域网（例如使用了 frp、ngrok、Cloudflare Tunnel 等隧道服务），请添加隧道连接：
 
 ```bash
 mypilot link add tunnel wss://tunnel.example.com --label "My Tunnel"
@@ -241,7 +242,7 @@ mypilot link add tunnel wss://tunnel.example.com --label "My Tunnel"
 
 ```bash
 docker compose build
-# 设置 LAN_IP 为本机局域网 IP（iPhone 必须在同一网络）
+# 设置 LAN_IP 为本机局域网 IP（手机必须在同一网络）
 LAN_IP=192.168.x.x docker compose up -d
 ```
 
@@ -270,7 +271,7 @@ npm run docker:restart   # 重新构建并重启
 | 问题 | 解决方案 |
 |------|----------|
 | 网关无法启动 | 检查是否已在运行：`mypilot status`。必要时终止残留进程。 |
-| 二维码无法扫描 | 确保 iPhone 和电脑在同一 WiFi 网络。尝试 `mypilot pair-info` 获取新的二维码。 |
+| 二维码无法扫描 | 确保手机和电脑在同一 WiFi 网络。尝试 `mypilot pair-info` 获取新的二维码。 |
 | 应用无法连接 | 检查防火墙设置，确保本机 16321 端口开放。 |
 | Hook 未触发 | 检查 `~/.claude/settings.json` 中的配置。运行 `mypilot init-hooks` 重新配置。 |
 | 二维码中 IP 不正确 | 设置 `LAN_IP` 环境变量，或启动网关后运行 `mypilot pair-info`。远程访问请使用 `mypilot link add tunnel <url>` 添加隧道连接。 |
