@@ -31,7 +31,14 @@ Gateway → Push Relay → APNs → iPhone / Apple Watch
 wrangler kv:namespace create PUSH_KV
 ```
 
-Copy the output ID to `wrangler.toml`.
+Set the output ID as an environment variable:
+
+```bash
+export PUSH_KV_NAMESPACE_ID="<your-kv-namespace-id>"
+export CLOUDFLARE_ACCOUNT_ID="<your-account-id>"
+```
+
+These are referenced in `wrangler.toml` via `${CLOUDFLARE_ACCOUNT_ID}` and `${PUSH_KV_NAMESPACE_ID}`.
 
 ### 3. Set Secrets
 
