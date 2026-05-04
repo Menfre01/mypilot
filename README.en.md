@@ -139,7 +139,7 @@ If you prefer to configure hooks manually, add the following to the `hooks` fiel
       { "matcher": "", "hooks": [{ "type": "command", "command": "curl --noproxy localhost --noproxy 127.0.0.1 -s -X POST 'http://127.0.0.1:16321/hook' -H 'Content-Type: application/json' -d @-", "timeout": 999999 }] }
     ],
     "SubagentStop": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "curl --noproxy localhost --noproxy 127.0.0.1 -s -X POST 'http://127.0.0.1:16321/hook' -H 'Content-Type: application/json' -d @-", "timeout": 999999 }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "curl --noproxy localhost --noproxy 127.0.0.1 -s -X POST 'http://127.0.0.1:16321/hook' -H 'Content-Type: application/json' -d @-" }] }
     ],
     "SessionStart": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "curl --noproxy localhost --noproxy 127.0.0.1 -s -X POST 'http://127.0.0.1:16321/hook' -H 'Content-Type: application/json' -d @-" }] }
@@ -232,7 +232,7 @@ This displays the pairing QR code and connection details (IP, port, key) without
 If your iPhone is not on the same LAN (e.g., using a tunnel service like frp, ngrok, Cloudflare Tunnel), add a tunnel link:
 
 ```bash
-mypilot link add tunnel wss://tunnel.example.com/ws-gateway --label "My Tunnel"
+mypilot link add tunnel wss://tunnel.example.com --label "My Tunnel"
 ```
 
 The QR code will automatically include the tunnel address, allowing the iOS app to connect through the tunnel.

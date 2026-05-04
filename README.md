@@ -139,7 +139,7 @@ mypilot push disable                   # 禁用推送通知
       { "matcher": "", "hooks": [{ "type": "command", "command": "curl --noproxy localhost --noproxy 127.0.0.1 -s -X POST 'http://127.0.0.1:16321/hook' -H 'Content-Type: application/json' -d @-", "timeout": 999999 }] }
     ],
     "SubagentStop": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "curl --noproxy localhost --noproxy 127.0.0.1 -s -X POST 'http://127.0.0.1:16321/hook' -H 'Content-Type: application/json' -d @-", "timeout": 999999 }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "curl --noproxy localhost --noproxy 127.0.0.1 -s -X POST 'http://127.0.0.1:16321/hook' -H 'Content-Type: application/json' -d @-" }] }
     ],
     "SessionStart": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "curl --noproxy localhost --noproxy 127.0.0.1 -s -X POST 'http://127.0.0.1:16321/hook' -H 'Content-Type: application/json' -d @-" }] }
@@ -232,7 +232,7 @@ mypilot pair-info
 如果你的 iPhone 不在同一局域网（例如使用了 frp、ngrok、Cloudflare Tunnel 等隧道服务），请添加隧道连接：
 
 ```bash
-mypilot link add tunnel wss://tunnel.example.com/ws-gateway --label "My Tunnel"
+mypilot link add tunnel wss://tunnel.example.com --label "My Tunnel"
 ```
 
 二维码将自动包含隧道地址，使 iOS 应用能够通过隧道连接。
