@@ -6,6 +6,7 @@ import { encrypt, decrypt } from './crypto.js';
 export type MessageHandler = (message: ClientMessage, deviceId: string) => void;
 export type DisconnectHandler = (deviceId: string) => void;
 export type ConnectHandler = (url: URL, deviceId: string) => void;
+export type HeartbeatHandler = (deviceId: string) => void;
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const MAX_OFFLINE_QUEUE = 200;
@@ -17,6 +18,7 @@ export class WsBus {
   private messageHandlers: MessageHandler[] = [];
   private disconnectHandlers: DisconnectHandler[] = [];
   private connectHandlers: ConnectHandler[] = [];
+  private heartbeatHandlers: HeartbeatHandler[] = [];
   private heartbeatTimers = new Map<string, ReturnType<typeof setInterval>>();
   private perClientOfflineQueue = new Map<string, string[]>();
   private aliveSockets = new Map<WebSocket, boolean>();
@@ -85,6 +87,9 @@ export class WsBus {
 
       ws.on('pong', () => {
         this.aliveSockets.set(ws, true);
+        for (const handler of this.heartbeatHandlers) {
+          handler(deviceId);
+        }
       });
     });
   }
@@ -130,6 +135,10 @@ export class WsBus {
 
   onConnect(handler: ConnectHandler): void {
     this.connectHandlers.push(handler);
+  }
+
+  onHeartbeat(handler: HeartbeatHandler): void {
+    this.heartbeatHandlers.push(handler);
   }
 
   disconnect(deviceId?: string): void {

@@ -10,43 +10,37 @@ export class MessagePipeline {
   private _maxDrainedSeq = 0;
 
   readonly capacity: number;
-  readonly highWatermark: number;
-  readonly lowWatermark: number;
 
-  constructor(options?: {
-    capacity?: number;
-    highWatermark?: number;
-    lowWatermark?: number;
-  }) {
+  constructor(options?: { capacity?: number }) {
     this.capacity = options?.capacity ?? 500;
-    this.highWatermark = options?.highWatermark ?? Math.floor(this.capacity * 0.8);
-    this.lowWatermark = options?.lowWatermark ?? Math.floor(this.capacity * 0.2);
   }
 
   // ── 生产者接口 ──
 
-  push(msg: SessionMessage): boolean {
-    if (this._destroyed) return false;
-    if (this.buffer.length >= this.highWatermark) return false;
+  /** 推入一条消息。满时静默驱逐最旧消息，永不拒绝。 */
+  push(msg: SessionMessage): void {
+    if (this._destroyed) return;
+
+    // push 每次最多新增 1 条（替换或追加），溢出时驱逐最旧 1 条即可
+    if (this.buffer.length >= this.capacity) {
+      const oldest = this.buffer.shift();
+      if (oldest) this._removeFromIndices(oldest);
+    }
 
     if (msg.source === 'transcript' && msg.entry) {
       this._pushTranscript(msg);
     } else {
       this._pushHookOrOther(msg);
     }
-
-    return true;
   }
 
   // ── 消费者接口 ──
 
   pull(maxCount: number): SessionMessage[] {
-    // 按 seq 排序保证跨源（hook + transcript）时序正确
     this.buffer.sort((a, b) => a.seq - b.seq);
-    const result: SessionMessage[] = [];
-    while (result.length < maxCount && this.buffer.length > 0) {
-      const msg = this.buffer.shift()!;
-      result.push(msg);
+    const count = Math.min(maxCount, this.buffer.length);
+    const result = this.buffer.splice(0, count);
+    for (const msg of result) {
       this._removeFromIndices(msg);
     }
     if (result.length > 0) {
@@ -61,9 +55,9 @@ export class MessagePipeline {
       .sort((a, b) => a.seq - b.seq);
   }
 
-  getAllTranscriptEntries(): SessionMessage[] {
+  getBySource(source: 'hook' | 'transcript'): SessionMessage[] {
     return this.buffer
-      .filter(m => m.source === 'transcript')
+      .filter(m => m.source === source)
       .sort((a, b) => a.seq - b.seq);
   }
 
@@ -73,15 +67,10 @@ export class MessagePipeline {
     return this.buffer.length;
   }
 
-  isBackpressured(): boolean {
-    return this.buffer.length >= this.highWatermark;
-  }
-
   isEmpty(): boolean {
     return this.buffer.length === 0;
   }
 
-  /** 最近一次 pull 消费到的最大 seq，用于判断缓冲区是否可能不完整 */
   get maxDrainedSeq(): number {
     return this._maxDrainedSeq;
   }
@@ -117,7 +106,6 @@ export class MessagePipeline {
     const entry = msg.entry!;
     const entryKey = `${msg.sessionId}:${entry.index}`;
 
-    // entryIndex 去重：同 sessionId:index 保留最新
     const existingEntry = this.entryIndex.get(entryKey);
     if (existingEntry) {
       const pos = this.buffer.indexOf(existingEntry);
@@ -142,7 +130,7 @@ export class MessagePipeline {
 
       const eventName = (hookMsg.event?.event_name ?? '') as string;
       if (isInteractivePreToolUse(eventName, hookMsg.event ?? {})) {
-        continue; // 交互式 PreToolUse 不被替代
+        continue; // 交互式 PreToolUse 不被 transcript 替代
       }
 
       const pos = this.buffer.indexOf(hookMsg);
@@ -163,7 +151,6 @@ export class MessagePipeline {
       return;
     }
 
-    // 无需替换，追加
     this.buffer.push(msg);
     this.entryIndex.set(entryKey, msg);
     this._emitDrain();
@@ -186,6 +173,7 @@ export class MessagePipeline {
           }
           this._removeFromIndices(existingHook);
           this.toolUseIndex.set(tuKey, msg);
+          this._emitDrain();
           return;
         }
         this.toolUseIndex.set(tuKey, msg);

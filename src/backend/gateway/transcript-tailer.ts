@@ -7,9 +7,6 @@ import type { SessionMessage } from '../../shared/protocol.js';
 export interface TailerOptions {
   pollIntervalMs?: number;
   catchUpRetryDelaysMs?: number[];
-  pushRetryDelayMs?: number;
-  maxPushRetries?: number;
-  onDrop?: (msg: SessionMessage) => void;
 }
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -21,9 +18,6 @@ export class TranscriptTailer {
   private nextSeqFn: () => number;
   private pollIntervalMs: number;
   private catchUpRetryDelaysMs: number[];
-  private pushRetryDelayMs: number;
-  private maxPushRetries: number;
-  private onDrop?: (msg: SessionMessage) => void;
 
   private lastKnownSize = 0;
   private lastReadIndex = 0;
@@ -47,9 +41,6 @@ export class TranscriptTailer {
     this.nextSeqFn = nextSeqFn;
     this.pollIntervalMs = options?.pollIntervalMs ?? 1000;
     this.catchUpRetryDelaysMs = options?.catchUpRetryDelaysMs ?? [200, 400, 800, 1600, 3200];
-    this.pushRetryDelayMs = options?.pushRetryDelayMs ?? 100;
-    this.maxPushRetries = options?.maxPushRetries ?? 10;
-    this.onDrop = options?.onDrop;
   }
 
   get stopped(): boolean {
@@ -66,7 +57,6 @@ export class TranscriptTailer {
       await sleep(delayMs);
     }
     if (!fileReady && !existsSync(this.transcriptPath)) {
-      // 文件尚未出现，启动监控等待文件创建
       this._startWatching();
       return;
     }
@@ -84,7 +74,7 @@ export class TranscriptTailer {
           source: 'transcript',
           entry,
         };
-        await this._pushWithRetry(msg);
+        this.pipeline.push(msg);
       }
       this.lastKnownSize = result.fileSize;
       this.lastReadIndex = result.entries.length > 0
@@ -107,7 +97,6 @@ export class TranscriptTailer {
   }
 
   stop(): void {
-    // 先停止定时器和 watcher，防止新的变更触发
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
@@ -117,7 +106,6 @@ export class TranscriptTailer {
       this.watcher = null;
     }
 
-    // 最后一次同步读取并刷新缓冲区
     this._finalFlush();
 
     this._stopped = true;
@@ -126,12 +114,10 @@ export class TranscriptTailer {
   // ── 内部实现 ──
 
   private _startWatching(): void {
-    // Poll 兜底（Docker/NFS 兼容）
     this.pollTimer = setInterval(() => {
       void this._checkForChanges();
     }, this.pollIntervalMs);
 
-    // fs.watch 主监控 — 监听父目录以兼容 atomic rename
     const parentDir = dirname(this.transcriptPath);
     try {
       this.watcher = watch(parentDir, { persistent: false }, (_eventType, filename) => {
@@ -162,7 +148,6 @@ export class TranscriptTailer {
       }
 
       if (currentSize < this.lastKnownSize) {
-        // 文件被截断，重置并全量重读
         this.lastKnownSize = 0;
         this.lastReadIndex = 0;
         this.partialLine = '';
@@ -170,7 +155,6 @@ export class TranscriptTailer {
 
       if (currentSize <= this.lastKnownSize) return;
 
-      // 有新增数据
       const bytesToRead = currentSize - this.lastKnownSize;
       const buf = Buffer.alloc(bytesToRead);
       let fd: number | undefined;
@@ -211,7 +195,7 @@ export class TranscriptTailer {
             },
           };
 
-          await this._pushWithRetry(msg);
+          this.pipeline.push(msg);
           this.lastReadIndex = entryIndex + 1;
         }
       } finally {
@@ -225,32 +209,13 @@ export class TranscriptTailer {
       this._reading = false;
     }
 
-    // 读取期间有新的变更事件，重新检查
     if (this._dirty) {
       this._dirty = false;
       void this._checkForChanges();
     }
   }
 
-  private async _pushWithRetry(msg: SessionMessage): Promise<void> {
-    if (this.pipeline.push(msg)) return;
-
-    for (let attempt = 0; attempt < this.maxPushRetries; attempt++) {
-      if (this._stopped) return;
-      await sleep(this.pushRetryDelayMs);
-      if (this.pipeline.push(msg)) return;
-    }
-    // 超过最大重试次数，先持久化再丢弃
-    this.onDrop?.(msg);
-    console.warn(
-      '[TranscriptTailer] 丢弃消息 session=%s seq=%d index=%d：管道持续背压超过 %dms',
-      msg.sessionId, msg.seq, msg.entry?.index ?? -1,
-      this.pushRetryDelayMs * this.maxPushRetries,
-    );
-  }
-
   private _finalFlush(): void {
-    // 读取上次检查后新增的字节
     try {
       const st = statSync(this.transcriptPath);
       const currentSize = st.size;
@@ -283,9 +248,7 @@ export class TranscriptTailer {
                 blocks: parsed.blocks,
               },
             };
-            if (!this.pipeline.push(msg)) {
-              this.onDrop?.(msg);
-            }
+            this.pipeline.push(msg);
             this.lastReadIndex = entryIndex + 1;
           }
           this.lastKnownSize = currentSize;
@@ -297,7 +260,6 @@ export class TranscriptTailer {
       // 文件不可读时跳过
     }
 
-    // 尝试将残留 partialLine 作为完整的 JSON 行解析（缺少尾部换行符的完整行）
     if (this.partialLine.trim()) {
       try {
         const rawEntry = JSON.parse(this.partialLine);
@@ -318,9 +280,7 @@ export class TranscriptTailer {
               blocks: parsed.blocks,
             },
           };
-          if (!this.pipeline.push(msg)) {
-            this.onDrop?.(msg);
-          }
+          this.pipeline.push(msg);
         }
       } catch {
         // 真正不完整的行，丢弃

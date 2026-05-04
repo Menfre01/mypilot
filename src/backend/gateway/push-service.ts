@@ -59,9 +59,9 @@ export class PushService {
     payload: PushPayload,
     signal?: AbortSignal,
   ): Promise<SendResult> {
-    const maxRetries = 2;
-    const baseDelay = 1000;
-    const fetchTimeoutMs = 8_000;
+    const maxRetries = 4;
+    const baseDelay = 2000;
+    const fetchTimeoutMs = 12_000;
 
     const env = payload.environment ?? 'undefined';
     console.log('[PushService] sending to relay: env=%s token=%s***', env, deviceToken.slice(0, 8));
@@ -152,13 +152,32 @@ export class PushService {
         }
         if (response.status === HTTP_STATUS.UNAUTHORIZED) return { ok: false };
 
-        // Read only first 500 bytes to avoid memory pressure on large error pages
+        // 4xx — unrecoverable client error, don't retry
+        if (Math.floor(response.status / 100) === 4) {
+          const relayBody = await readFirstBytes(response, 500).catch(() => '<read-error>');
+          console.error(
+            '[PushService] Push rejected (not retrying): HTTP %d body=%s',
+            response.status,
+            relayBody,
+          );
+          return { ok: false };
+        }
+
+        // 5xx or unexpected status — retry (cold start / upstream failure)
         const relayBody = await readFirstBytes(response, 500).catch(() => '<read-error>');
-        console.error(
-          '[PushService] Push failed: HTTP %d body=%s',
-          response.status,
-          relayBody,
-        );
+        if (attempt < maxRetries - 1) {
+          console.error(
+            '[PushService] Push attempt failed (will retry): HTTP %d body=%s',
+            response.status,
+            relayBody,
+          );
+        } else {
+          console.error(
+            '[PushService] Push failed (no more retries): HTTP %d body=%s',
+            response.status,
+            relayBody,
+          );
+        }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         if (attempt < maxRetries - 1) {
@@ -240,6 +259,7 @@ function truncateTail(text: string, maxLen: number): string {
 
 function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<boolean> {
   if (!signal) return new Promise((resolve) => setTimeout(resolve, ms)).then(() => true);
+  if (signal.aborted) return Promise.resolve(false);
   return new Promise((resolve) => {
     const onAbort = () => {
       clearTimeout(timer);

@@ -51,8 +51,6 @@ describe('HookHandler', () => {
     eventLogger = new EventLogger(logDir);
     streamManager = new SessionStreamManager(eventLogger, wsBus, {
       pipelineCapacity: 20,
-      pipelineHighWatermark: 15,
-      pipelineLowWatermark: 5,
     });
     handler = new HookHandler(sessionStore, pendingStore, deviceStore, wsBus);
     handler.setStreamManager(streamManager);
@@ -609,20 +607,19 @@ describe('HookHandler', () => {
       expect(result).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } });
     });
 
-    it('管道背压时重试后返回 503', async () => {
-      // 塞满管道直到 highWatermark
+    it('环形缓冲满时不拒绝 push', async () => {
+      // 填满管道
       for (let i = 1; i <= 15; i++) {
         streamManager.push({
           sessionId: 'filler', seq: i, timestamp: Date.now(), source: 'hook',
           event: { session_id: 'filler', event_name: 'Notification' },
         });
       }
-      expect(streamManager.isBackpressured()).toBe(true);
 
-      // hook event 推入会失败，重试后仍失败返回 503
+      // hook event 推入应成功（永不拒绝，环形缓冲驱逐最旧）
       await expect(
         handler.handleEvent(makeEvent('PreToolUse', 's1', { tool_name: 'Bash' })),
-      ).rejects.toMatchObject({ status: 503 });
+      ).resolves.toBeDefined();
     });
 
     it('新 session 仍广播 session_start', async () => {
@@ -709,9 +706,8 @@ describe('HookHandler', () => {
 
   // ── Push notification behaviour ──
 
-  describe('push with backpressure', () => {
-    it('管道背压时不阻断推送发送', async () => {
-      // 创建带 PushService 的 handler
+  describe('push with full pipeline', () => {
+    it('环形缓冲满时推送发送仍然正常工作', async () => {
       const pushService = new PushService('https://push.example.com', 'test-key', 'gw-1');
       const pushSpy = vi.spyOn(pushService, 'sendPush').mockResolvedValue({ ok: true });
       const handlerWithPush = new HookHandler(
@@ -719,33 +715,33 @@ describe('HookHandler', () => {
       );
       handlerWithPush.setStreamManager(streamManager);
 
-      // 注册 iOS 设备并设置为 takeover
       deviceStore.register('ios-device', 'ios', 'en');
       deviceStore.setPushToken('ios-device', 'device-token-abc', 'sandbox');
       deviceStore.setConnected('ios-device', false);
       handlerWithPush.setMode('takeover', 'ios-device');
 
-      // 塞满管道触发背压
+      // 填满管道
       for (let i = 1; i <= 15; i++) {
         streamManager.push({
           sessionId: 'filler', seq: i, timestamp: Date.now(), source: 'hook',
           event: { session_id: 'filler', event_name: 'Notification' },
         });
       }
-      expect(streamManager.isBackpressured()).toBe(true);
 
-      // 发起交互事件 — 应该先推送再 503
-      await expect(
-        handlerWithPush.handleEvent(makeEvent('PermissionRequest', 's1', { tool_name: 'Bash' })),
-      ).rejects.toMatchObject({ status: 503 });
+      // 发起交互事件 — PermissionRequest 在 takeover 模式下阻塞
+      const handlePromise = handlerWithPush.handleEvent(makeEvent('PermissionRequest', 's1', { tool_name: 'Bash' }));
 
-      // 推送应该在背压报错之前已发出
+      // 推送应已发出（管道满时不拒绝 push）
       expect(pushSpy).toHaveBeenCalledTimes(1);
       expect(pushSpy).toHaveBeenCalledWith(
         'device-token-abc',
         expect.objectContaining({ eventName: 'PermissionRequest' }),
         expect.any(AbortSignal),
       );
+
+      // 释放阻塞交互，让 handleEvent 完成
+      pendingStore.releaseAll();
+      await expect(handlePromise).resolves.toBeDefined();
     });
   });
 

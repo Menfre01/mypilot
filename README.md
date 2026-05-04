@@ -9,7 +9,9 @@
 中文 | [English](README.en.md)
 </div>
 
-> **下载 MyPilot** — iOS 版已在 [App Store](https://apps.apple.com/hk/app/mypilot/id6762133874) 海外各大区上架（中国大陆区暂不可用）。Android 版可在 [GitHub Releases](https://github.com/Menfre01/mypilot/releases) 下载 APK。
+> **下载 MyPilot** — iOS 版已在 [App Store](https://apps.apple.com/hk/app/mypilot/id6762133874) 海外各大区上架（中国大陆区暂不可用）。大陆用户可通过 [TestFlight](https://testflight.apple.com/join/gU2Tw8Hg) 体验。Android 版可在 [GitHub Releases](https://github.com/Menfre01/mypilot/releases) 下载 APK。
+>
+> **在线体验** — 无需部署网关，下载 App 后直接扫描 [Demo Gateway](https://mypilot-demo-gateway.menfre.workers.dev/) 的二维码即可体验完整功能。
 
 MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你的手机。在接管模式下，你可以直接在手机上审批权限、回答问题、提交 Prompt。
 
@@ -26,7 +28,7 @@ MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你
 ## 环境要求
 
 - **Node.js** >= 20
-- **客户端**：[MyPilot iOS App](https://apps.apple.com/hk/app/mypilot/id6762133874)（App Store 海外区）或 [Android APK](https://github.com/Menfre01/mypilot/releases/latest)
+- **客户端**：[MyPilot iOS App](https://apps.apple.com/hk/app/mypilot/id6762133874)（App Store 海外区）或 [TestFlight](https://testflight.apple.com/join/gU2Tw8Hg)（中国大陆区）或 [Android APK](https://github.com/Menfre01/mypilot/releases/latest)
 - **Claude Code** CLI — [安装指南](https://docs.anthropic.com/en/docs/claude-code/overview#installing-claude-code)
 
 ## 快速开始

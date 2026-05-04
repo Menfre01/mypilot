@@ -1,8 +1,9 @@
 import type {
   GatewayMessage, GatewayConnected, GatewayEvent, GatewaySessionStart,
-  GatewaySessionEnd, GatewayModeChanged,
+  GatewaySessionEnd, GatewayModeChanged, GatewayTranscriptEntry,
   SessionInfo, SSEHookEvent, PendingInteraction, SessionEvent,
   ClientMessage, GatewayMode, PushEnvironment, DevicePlatform,
+  TranscriptEntry, TranscriptBlock, TokenUsage,
 } from './protocol';
 import { DEMO_KEY_B64, SESSION_COLORS, PROTOCOL_VERSION } from './protocol';
 import { importKey, encrypt, decrypt } from './crypto';
@@ -57,10 +58,19 @@ export class DemoGatewayDO implements DurableObject {
     takeoverOwner: null,
     pending: {},
   };
+  private transcriptIndex = 0;
+  private sendQueue: Promise<void> = Promise.resolve();
 
   constructor(state: DurableObjectState, env: DemoEnv) {
     this.state = state;
     this.env = env;
+  }
+
+  // 串行化消息发送，确保 hook event 和 transcript entry 按顺序到达客户端
+  private enqueue(fn: () => Promise<void>): void {
+    this.sendQueue = this.sendQueue.then(fn).catch((err) => {
+      console.error('[DemoGW] sendQueue error:', err);
+    });
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -83,12 +93,19 @@ export class DemoGatewayDO implements DurableObject {
     this.clients.add(server);
 
     const deviceId = url.searchParams.get('deviceId') || `dev_${Date.now().toString(36)}`;
+    console.log('[DemoGW] WebSocket connected, deviceId=%s, totalClients=%d', deviceId, this.clients.size);
+
+    // 自动将连接的客户端设为 takeover owner，确保交互事件（AskUserQuestion 等）
+    // 能正确入队到 SessionPromptBar，用户才可以看到 submit/decline 按钮
+    this.doState.mode = 'takeover';
+    this.doState.takeoverOwner = deviceId;
 
     server.addEventListener('message', (event) => this.handleMessage(server, event.data as string, deviceId));
     server.addEventListener('close', () => this.handleClose(server));
     server.addEventListener('error', () => this.handleClose(server));
 
-    this.sendConnected(server);
+    await this.sendConnected(server);
+    console.log('[DemoGW] sendConnected done, starting simulation');
     this.ensureSimulation();
 
     return new Response(null, {
@@ -140,8 +157,8 @@ export class DemoGatewayDO implements DurableObject {
     };
   }
 
-  private sendConnected(ws: WebSocket) {
-    this.sendEncrypted(ws, this.buildConnectedMsg());
+  private async sendConnected(ws: WebSocket) {
+    await this.sendEncrypted(ws, this.buildConnectedMsg());
   }
 
   private async handleMessage(ws: WebSocket, data: string, deviceId: string) {
@@ -157,22 +174,22 @@ export class DemoGatewayDO implements DurableObject {
         case 'takeover':
           this.doState.mode = 'takeover';
           this.doState.takeoverOwner = deviceId;
-          this.broadcast({ type: 'mode_changed', mode: 'takeover', takeoverOwner: deviceId });
+          this.enqueue(() => this.broadcast({ type: 'mode_changed', mode: 'takeover', takeoverOwner: deviceId }));
           break;
         case 'release':
           if (this.doState.takeoverOwner === deviceId) {
             this.doState.mode = 'bystander';
             this.doState.takeoverOwner = null;
-            this.broadcast({ type: 'mode_changed', mode: 'bystander' });
+            this.enqueue(() => this.broadcast({ type: 'mode_changed', mode: 'bystander' }));
           }
           break;
         case 'interact':
-          this.handleInteract(msg.eventId);
+          this.handleInteract(msg.eventId, msg.sessionId, msg.response);
           break;
         case 'delete_session':
           delete this.doState.sessions[msg.sessionId];
           this.doState.events = this.doState.events.filter(e => e.sessionId !== msg.sessionId);
-          this.broadcast({ type: 'session_end', sessionId: msg.sessionId });
+          this.enqueue(() => this.broadcast({ type: 'session_end', sessionId: msg.sessionId }));
           break;
         case 'register_device': {
           this.devices.set(deviceId, { platform: msg.platform, locale: msg.locale });
@@ -184,14 +201,55 @@ export class DemoGatewayDO implements DurableObject {
           info.pushEnvironment = msg.environment ?? 'sandbox';
           break;
         }
+        case 'subscribe_session':
+          // Demo has no persisted event log — ignore, client requests history
+          // that doesn't exist beyond the in-memory buffer.
+          break;
+        case 'disconnect':
+          // Client is about to close — no action needed.
+          break;
       }
     } catch (e) {
       console.error('handleMessage error:', e);
     }
   }
 
-  private handleInteract(eventId: string) {
+  private handleInteract(eventId: string, sessionId: string, response: Record<string, unknown>) {
+    const pending = this.doState.pending[eventId];
+    if (!pending) return;
+
     delete this.doState.pending[eventId];
+
+    // 模拟生产环境：交互完成后推送 PostToolUse + tool_result transcript
+    const event = pending.event;
+    const toolName = event.tool_name as string | undefined;
+    const toolUseId = event.tool_use_id as string | undefined;
+    const now = Date.now();
+
+    if (toolName && toolUseId) {
+      const answer = getAnswerText(response);
+
+      // PostToolUse hook event
+      const postEvent: SSEHookEvent = {
+        session_id: sessionId,
+        event_name: 'PostToolUse',
+        tool_name: toolName,
+        tool_use_id: toolUseId,
+        tool_result: answer,
+        timestamp: now,
+        event_id: `post_${eventId}`,
+      };
+      this.emitEvent(sessionId, postEvent);
+
+      // tool_result transcript entry
+      this.emitTranscript(sessionId, this.makeToolResultEntry(
+        toolUseId,
+        now,
+        answer,
+        false,
+      ));
+    }
+
     this.scheduler?.resolveBlocking(eventId);
   }
 
@@ -330,34 +388,99 @@ export class DemoGatewayDO implements DurableObject {
 
     this.scheduler = new SimulationScheduler(
       (step) => {
-        if (step.action === 'block' && step.event) {
+        if (!step.event) return;
+
+        const sessionId = step.sessionId!;
+        const event = step.event as SSEHookEvent;
+        const eventName = event.event_name as string;
+        const toolName = event.tool_name as string | undefined;
+        const toolUseId = event.tool_use_id as string | undefined;
+
+        // 统一时间戳：同一 step 内的 hook event 和 transcript entry 使用相同的 timestamp
+        const now = Date.now();
+        (event as Record<string, unknown>).timestamp = now;
+
+        if (step.action === 'block') {
           const pending: PendingInteraction = {
-            sessionId: step.sessionId!,
-            eventId: step.event.event_id,
-            event: step.event,
+            sessionId,
+            eventId: event.event_id,
+            event,
           };
-          this.doState.pending[step.event.event_id] = pending;
-          const msg: GatewayEvent = {
-            type: 'event',
-            sessionId: step.sessionId!,
-            event: step.event,
-          };
-          this.broadcast(msg);
+          this.doState.pending[event.event_id] = pending;
+
+          if (eventName === 'PermissionRequest' && toolName && toolUseId) {
+            const input = (event.tool_input ?? {}) as Record<string, unknown>;
+            // 先发 event 让客户端创建交互卡片，再发 transcript entries 作为上下文
+            this.emitEvent(sessionId, event);
+            this.emitTranscript(sessionId, this.makeThinkingEntry(toolName, now, input));
+            this.emitTranscript(sessionId, this.makeTextEntry(this.getActionText(toolName, input), now));
+            this.emitTranscript(sessionId, this.makeToolUseEntry(toolName, toolUseId, now, input));
+          } else if (eventName === 'PreToolUse' && toolName === 'AskUserQuestion' && toolUseId) {
+            const input = (event.tool_input ?? {}) as Record<string, unknown>;
+            // 先发 event 让客户端创建 _InteractionOptionsCard 交互卡片
+            this.emitEvent(sessionId, event);
+            this.emitTranscript(sessionId, this.makeToolUseEntry(toolName, toolUseId, now, input));
+          } else if (eventName === 'PreToolUse' && toolName === 'ExitPlanMode' && toolUseId) {
+            const input = (event.tool_input ?? {}) as Record<string, unknown>;
+            // 先发 event 让客户端创建 _ExitPlanModeMessage 卡片，plan 正文在其中展示
+            this.emitEvent(sessionId, event);
+            this.emitTranscript(sessionId, this.makeToolUseEntry(toolName, toolUseId, now, input));
+          } else if (eventName === 'Elicitation') {
+            const message = String(event.message ?? '');
+            this.emitEvent(sessionId, event);
+            this.emitTranscript(sessionId, this.makeTextEntry(message, now));
+          } else if (eventName === 'Stop') {
+            const reason = String(event.reason ?? '');
+            this.emitEvent(sessionId, event);
+            this.emitTranscript(sessionId, this.makeTextEntry(reason, now));
+          } else {
+            this.emitEvent(sessionId, event);
+          }
 
           if (this.doState.mode === 'takeover') {
-            void this.trySendPush(step.event);
+            void this.trySendPush(event);
           }
-        } else if (step.action === 'event' && step.event) {
-          this.doState.events.push({ sessionId: step.sessionId!, event: step.event });
-          if (this.doState.events.length > 200) {
-            this.doState.events = this.doState.events.slice(-200);
+          return;
+        }
+
+        // ── 非阻塞事件：按真实消息流顺序生成 ──
+
+        if (eventName === 'PreToolUse' && toolName && toolUseId) {
+          const input = (event.tool_input ?? {}) as Record<string, unknown>;
+          // 先发 event 让客户端创建 tool item，再发 transcript entries 作为上下文
+          this.emitEvent(sessionId, event);
+          this.emitTranscript(sessionId, this.makeThinkingEntry(toolName, now, input));
+          this.emitTranscript(sessionId, this.makeTextEntry(this.getActionText(toolName, input), now));
+          this.emitTranscript(sessionId, this.makeToolUseEntry(toolName, toolUseId, now, input));
+          return;
+        }
+
+        if ((eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') && toolName && toolUseId) {
+          this.emitEvent(sessionId, event);
+          const content = String(event.tool_result ?? event.tool_response ?? '(no output)');
+          this.emitTranscript(sessionId, this.makeToolResultEntry(
+            toolUseId,
+            now,
+            content,
+            eventName === 'PostToolUseFailure',
+          ));
+          return;
+        }
+
+        // ── 其他事件 ──
+
+        if (eventName === 'UserPromptSubmit') {
+          const prompt = String(event.prompt ?? '');
+          this.emitEvent(sessionId, event);
+          if (prompt) {
+            this.emitTranscript(sessionId, this.makeUserPromptEntry(prompt, now));
           }
-          const msg: GatewayEvent = {
-            type: 'event',
-            sessionId: step.sessionId!,
-            event: step.event,
-          };
-          this.broadcast(msg);
+        } else {
+          this.emitEvent(sessionId, event);
+        }
+
+        if (this.doState.mode === 'takeover') {
+          void this.trySendPush(event);
         }
       },
       (sessionId: string) => {
@@ -365,13 +488,11 @@ export class DemoGatewayDO implements DurableObject {
         if (!sim) return;
         const info = toSessionInfo(sim);
         this.doState.sessions[sessionId] = info;
-        const msg: GatewaySessionStart = { type: 'session_start', session: info };
-        this.broadcast(msg);
+        this.enqueue(() => this.broadcast({ type: 'session_start', session: info }));
       },
       (sessionId: string) => {
         delete this.doState.sessions[sessionId];
-        const msg: GatewaySessionEnd = { type: 'session_end', sessionId };
-        this.broadcast(msg);
+        this.enqueue(() => this.broadcast({ type: 'session_end', sessionId }));
         if (Object.keys(this.doState.sessions).length === 0) {
           this.doState.events = [];
           this.doState.pending = {};
@@ -381,6 +502,177 @@ export class DemoGatewayDO implements DurableObject {
 
     this.scheduler.start();
   }
+
+  // ── Transcript entry 构造 ──
+
+  private nextIndex(): number {
+    return ++this.transcriptIndex;
+  }
+
+  private baseUsage(extra?: Partial<TokenUsage>): TokenUsage {
+    return {
+      input_tokens: 12000,
+      output_tokens: 0,
+      cache_read_input_tokens: 29056,
+      ...extra,
+    };
+  }
+
+  private makeThinkingEntry(toolName: string, timestamp: number, input?: Record<string, unknown>): TranscriptEntry {
+    return {
+      index: this.nextIndex(),
+      type: 'assistant' as const,
+      timestamp,
+      model: 'Claude Opus 4',
+      usage: this.baseUsage(),
+      blocks: [{ type: 'thinking', thinking: getThinkingText(toolName, input) }],
+    };
+  }
+
+  private makeTextEntry(text: string, timestamp: number): TranscriptEntry {
+    return {
+      index: this.nextIndex(),
+      type: 'assistant' as const,
+      timestamp,
+      model: 'Claude Opus 4',
+      usage: this.baseUsage(),
+      blocks: [{ type: 'text', text }],
+    };
+  }
+
+  private makeToolUseEntry(toolName: string, toolUseId: string, timestamp: number, input: Record<string, unknown>): TranscriptEntry {
+    return {
+      index: this.nextIndex(),
+      type: 'assistant' as const,
+      timestamp,
+      model: 'Claude Opus 4',
+      usage: this.baseUsage({ output_tokens: 150 }),
+      blocks: [{ type: 'tool_use', id: toolUseId, name: toolName, input }],
+    };
+  }
+
+  private makeToolResultEntry(toolUseId: string, timestamp: number, content: string, isError: boolean): TranscriptEntry {
+    return {
+      index: this.nextIndex(),
+      type: 'user' as const,
+      timestamp,
+      blocks: [{ type: 'tool_result', tool_use_id: toolUseId, content, isError }],
+    };
+  }
+
+  private makeUserPromptEntry(prompt: string, timestamp: number): TranscriptEntry {
+    return {
+      index: this.nextIndex(),
+      type: 'user' as const,
+      timestamp,
+      blocks: [{ type: 'text', text: prompt }],
+    };
+  }
+
+  private emitTranscript(sessionId: string, entry: TranscriptEntry) {
+    const seq = ++this.doState.seq;
+    this.enqueue(() => this.broadcast({ type: 'transcript_entry', sessionId, seq, entry }));
+  }
+
+  private emitEvent(sessionId: string, event: SSEHookEvent) {
+    const seq = ++this.doState.seq;
+    this.doState.events.push({ sessionId, seq, event });
+    if (this.doState.events.length > 200) {
+      this.doState.events = this.doState.events.slice(-200);
+    }
+    this.enqueue(() => this.broadcast({ type: 'event', sessionId, seq, event }));
+  }
+
+  private getActionText(toolName: string, input?: Record<string, unknown>): string {
+    const filePath = input?.file_path as string | undefined;
+    const command = input?.command as string | undefined;
+    const description = input?.description as string | undefined;
+    const pattern = input?.pattern as string | undefined;
+
+    switch (toolName) {
+      case 'Read':
+        return `Let me read \`${filePath || 'the file'}\` to understand the current implementation.`;
+      case 'Bash':
+        return `Let me run \`${command || 'the command'}\` to check the current state.`;
+      case 'Glob':
+        return `Let me find files matching \`${pattern || '**/*'}\` to understand the project structure.`;
+      case 'Grep':
+        return `Let me search for \`${pattern || ''}\` across the codebase.`;
+      case 'Edit':
+        return `Let me modify \`${filePath || 'the file'}\` to implement the required changes.`;
+      case 'Write':
+        return `Let me create \`${filePath || 'a new file'}\` to complete this task.`;
+      case 'Agent':
+        return `This task needs focused work. Let me delegate to a subagent${description ? `: ${description}` : ''}.`;
+      case 'TaskUpdate':
+        return `Let me update the task status.`;
+      case 'ExitPlanMode':
+        return `Plan is ready for your review.`;
+      default:
+        return `Let me use ${toolName} to continue.`;
+    }
+  }
+}
+
+function getThinkingText(toolName: string, input?: Record<string, unknown>): string {
+  const filePath = input?.file_path as string | undefined;
+  const pattern = input?.pattern as string | undefined;
+  const command = input?.command as string | undefined;
+  const description = input?.description as string | undefined;
+
+  switch (toolName) {
+    case 'Glob':
+      return `I need to find files matching \`${pattern || '**/*'}\` to understand the project structure. Let me search the codebase to locate relevant files.`;
+    case 'Grep':
+      return `Let me search for \`${pattern || ''}\` across the codebase to find relevant references and understand how this is used.`;
+    case 'Read':
+      return `I should read \`${filePath || 'the file'}\` first to understand the current implementation before making any changes.`;
+    case 'Bash':
+      return `Let me run \`${command || 'the command'}\` to verify the current state and check if everything works as expected.`;
+    case 'Edit':
+      return `I need to make a precise edit to \`${filePath || 'the file'}\` to implement the required changes.`;
+    case 'Write':
+      return `Let me create \`${filePath || 'a new file'}\` with the necessary content to complete this task.`;
+    case 'Agent':
+      return `This task requires focused work. Let me delegate to a subagent${description ? ` for: ${description}` : ''}.`;
+    case 'TaskUpdate':
+      return `Let me update the task status to reflect the current progress.`;
+    case 'ExitPlanMode':
+      return `The implementation plan is ready. Let me finalize the approach and submit for review, making sure each step has been carefully considered.`;
+    default:
+      return `Let me use ${toolName} to proceed with the current task.`;
+  }
+}
+
+function getQuestionPreview(input: Record<string, unknown>): string {
+  const prompt = input.prompt as string | undefined;
+  const questions = input.questions as Array<{
+    question?: string;
+    header?: string;
+    multiSelect?: boolean;
+    options?: Array<{ label: string; description?: string }>;
+  }> | undefined;
+
+  if (questions && questions.length > 0) {
+    const q = questions[0];
+    const isMulti = q.multiSelect === true;
+    const indicator = isMulti ? ' (Select all that apply)' : ' (Select one)';
+    const header = q.header ? `**${q.header}**\n` : '';
+    const questionText = q.question || prompt || '';
+    const options = q.options?.map(o => `- ${o.label}${o.description ? `: ${o.description}` : ''}`).join('\n') ?? '';
+    return `${header}${questionText}${indicator}${options ? '\n' + options : ''}`;
+  }
+
+  if (prompt) return prompt;
+  return 'A question requires your response.';
+}
+
+function getAnswerText(response: Record<string, unknown>): string {
+  const answer = response.answer as string | undefined;
+  const decision = response.decision as string | undefined;
+  if (answer && answer.trim()) return answer;
+  if (decision) return decision;
+  return JSON.stringify(response);
 }
 
 function getNotification(eventName: string, toolName?: string): { title: string; body: string; category?: string } {

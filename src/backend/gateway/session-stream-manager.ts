@@ -18,8 +18,6 @@ export class SessionStreamManager {
     wsBus: WsBus,
     options?: {
       pipelineCapacity?: number;
-      pipelineHighWatermark?: number;
-      pipelineLowWatermark?: number;
       isHidden?: (sessionId: string) => boolean;
     },
   ) {
@@ -28,8 +26,6 @@ export class SessionStreamManager {
     this.wsBus = wsBus;
     this.pipeline = new MessagePipeline({
       capacity: options?.pipelineCapacity ?? 500,
-      highWatermark: options?.pipelineHighWatermark ?? 400,
-      lowWatermark: options?.pipelineLowWatermark ?? 100,
     });
   }
 
@@ -54,9 +50,6 @@ export class SessionStreamManager {
       transcriptPath,
       this.pipeline,
       () => this.nextSeqFn(),
-      {
-        onDrop: (msg) => this.eventLogger.logSessionMessage(msg),
-      },
     );
     this.tailers.set(sessionId, tailer);
     this.tailerPaths.set(sessionId, transcriptPath);
@@ -74,8 +67,8 @@ export class SessionStreamManager {
 
   // ── 生产者接口 ──
 
-  push(msg: SessionMessage): boolean {
-    return this.pipeline.push(msg);
+  push(msg: SessionMessage): void {
+    this.pipeline.push(msg);
   }
 
   // ── 消费者接口 ──
@@ -88,15 +81,19 @@ export class SessionStreamManager {
     return this.pipeline.getBufferedForSession(sessionId, fromSeq);
   }
 
-  getAllTranscriptEntries(): SessionMessage[] {
-    return this.pipeline.getAllTranscriptEntries()
+  getBySource(source: 'hook' | 'transcript'): SessionMessage[] {
+    return this.pipeline.getBySource(source)
       .filter(m => !this.isHidden(m.sessionId));
+  }
+
+  get pipelineSize(): number {
+    return this.pipeline.size;
   }
 
   broadcastMessage(msg: SessionMessage, targetDeviceId?: string): void {
     if (this.isHidden(msg.sessionId)) return;
     if (msg.source === 'hook' && msg.event) {
-      this.wsBus.broadcast({ type: 'event', sessionId: msg.sessionId, event: msg.event }, targetDeviceId);
+      this.wsBus.broadcast({ type: 'event', sessionId: msg.sessionId, seq: msg.seq, event: msg.event }, targetDeviceId);
     } else if (msg.source === 'transcript' && msg.entry) {
       this.wsBus.broadcast({ type: 'transcript_entry', sessionId: msg.sessionId, seq: msg.seq, entry: msg.entry }, targetDeviceId);
     }
@@ -115,7 +112,7 @@ export class SessionStreamManager {
       const buffered = this.pipeline.getBufferedForSession(sessionId, fromSeq);
 
       if (buffered.length === 0) {
-        messages = this.eventLogger.readSessionMessagesAfter(sessionId, fromSeq);
+        messages = this.eventLogger.readSessionMessagesAfter(sessionId, fromSeq, 1000);
       } else if (fromSeq <= this.pipeline.maxDrainedSeq) {
         const minBufferedSeq = buffered[0].seq;
         const diskMessages = this.eventLogger.readSessionMessagesBetween(
@@ -126,28 +123,12 @@ export class SessionStreamManager {
         messages = buffered;
       }
     } else {
-      messages = this.eventLogger.loadSessionHistory(sessionId);
+      messages = this.eventLogger.loadSessionHistory(sessionId, 1000);
     }
 
     for (const msg of messages) {
       this.broadcastMessage(msg, targetDeviceId);
     }
-  }
-
-  // ── 背压状态 ──
-
-  isBackpressured(): boolean {
-    return this.pipeline.isBackpressured();
-  }
-
-  /** 最近一次 drain 消费到的最大 seq，用于判断管道缓冲区是否可能不完整 */
-  get maxDrainedSeq(): number {
-    return this.pipeline.maxDrainedSeq;
-  }
-
-  /** 管道中待消费的消息数量 */
-  get bufferedCount(): number {
-    return this.pipeline.size;
   }
 
   // ── 序号分配 ──

@@ -77,6 +77,7 @@ export interface SessionInfo {
   color: string;
   colorIndex: number;
   startedAt: number;
+  displayName?: string;
 }
 
 // ── Token usage ──
@@ -127,6 +128,7 @@ export interface SSEHookEvent {
 /** A raw event tied to its source session. */
 export interface SessionEvent {
   sessionId: string;
+  seq: number;
   event: SSEHookEvent;
 }
 
@@ -160,7 +162,7 @@ export interface GatewayConnected {
   protocolVersion: number;
   sessions: SessionInfo[];
   mode: GatewayMode;
-  recentEvents: { sessionId: string; event: SSEHookEvent }[];
+  recentEvents: SessionEvent[];
   pendingInteractions: PendingInteraction[];
   takeoverOwner?: string;
   transcriptEntries?: { sessionId: string; seq: number; entry: TranscriptEntry }[];
@@ -170,7 +172,7 @@ export type GatewayMessage =
   | GatewayConnected
   | { type: 'session_start'; session: SessionInfo }
   | { type: 'session_end'; sessionId: string }
-  | { type: 'event'; sessionId: string; event: SSEHookEvent }
+  | { type: 'event'; sessionId: string; seq: number; event: SSEHookEvent }
   | { type: 'transcript_entry'; sessionId: string; seq: number; entry: TranscriptEntry }
   | { type: 'mode_changed'; mode: GatewayMode; takeoverOwner?: string };
 

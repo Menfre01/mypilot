@@ -540,38 +540,68 @@ async function sendAPNsPush(
   payload: PushRequest['payload'],
   environment: string,
 ): Promise<{ ok: boolean; apnsStatus: number; apnsBody: string }> {
-  try {
-    const jwtToken = await createAPNsJWT(env);
+  const maxRetries = 3;
+  const baseDelay = 500;
 
-    const isSandbox = environment === 'sandbox';
-    const apnsHost = isSandbox
-      ? 'https://api.development.push.apple.com'
-      : 'https://api.push.apple.com';
-    const apnsUrl = `${apnsHost}/3/device/${deviceToken}`;
+  const isSandbox = environment === 'sandbox';
+  const apnsHost = isSandbox
+    ? 'https://api.development.push.apple.com'
+    : 'https://api.push.apple.com';
+  const apnsUrl = `${apnsHost}/3/device/${deviceToken}`;
 
-    const expiration = apnsExpirationForEvent(payload.event_name, payload.tool_name);
-    const response = await fetch(apnsUrl, {
-      method: 'POST',
-      headers: {
-        authorization: `bearer ${jwtToken}`,
-        'apns-topic': env.APNS_TOPIC,
-        'apns-push-type': 'alert',
-        'apns-priority': '10',
-        'content-type': 'application/json',
-        ...(expiration !== undefined ? { 'apns-expiration': String(expiration) } : {}),
-      },
-      body: JSON.stringify(payload),
-    });
+  const expiration = apnsExpirationForEvent(payload.event_name, payload.tool_name);
+  const body = JSON.stringify(payload);
 
-    const responseBody = await response.text();
-    console.log(`[APNs] status=${response.status} body=${responseBody}`);
+  const jwtToken = await createAPNsJWT(env);
 
-    return { ok: response.ok, apnsStatus: response.status, apnsBody: responseBody };
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error('[APNs] Push failed:', msg);
-    return { ok: false, apnsStatus: 0, apnsBody: msg };
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      console.log(`[APNs] retry ${attempt}/${maxRetries - 1} in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+
+    try {
+      const response = await fetch(apnsUrl, {
+        method: 'POST',
+        headers: {
+          authorization: `bearer ${jwtToken}`,
+          'apns-topic': env.APNS_TOPIC,
+          'apns-push-type': 'alert',
+          'apns-priority': '10',
+          'content-type': 'application/json',
+          ...(expiration !== undefined ? { 'apns-expiration': String(expiration) } : {}),
+        },
+        body,
+      });
+
+      const responseBody = await response.text();
+
+      if (response.ok) {
+        console.log(`[APNs] status=${response.status} body=${responseBody}`);
+        return { ok: true, apnsStatus: response.status, apnsBody: responseBody };
+      }
+
+      // 4xx — unrecoverable (BadDeviceToken, BadCertificate, etc.)
+      if (Math.floor(response.status / 100) === 4) {
+        console.log(`[APNs] status=${response.status} body=${responseBody}`);
+        return { ok: false, apnsStatus: response.status, apnsBody: responseBody };
+      }
+
+      // 5xx — transient APNs failure, retry
+      console.error(`[APNs] 5xx attempt ${attempt + 1}/${maxRetries}: status=${response.status} body=${responseBody}`);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (attempt < maxRetries - 1) {
+        console.error('[APNs] Network error (will retry): %s', msg);
+      } else {
+        console.error('[APNs] Network error (no more retries): %s', msg);
+        return { ok: false, apnsStatus: 0, apnsBody: msg };
+      }
+    }
   }
+
+  return { ok: false, apnsStatus: 0, apnsBody: 'max retries exhausted' };
 }
 
 async function createAPNsJWT(env: Env): Promise<string> {

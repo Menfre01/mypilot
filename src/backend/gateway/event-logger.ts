@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import type { SSEHookEvent, TranscriptEntry, SessionMessage } from "../../shared/protocol.js";
+import type { SSEHookEvent, TranscriptEntry, SessionMessage, SessionEvent } from "../../shared/protocol.js";
 import { parseEntries } from "./transcript-reader.js";
 
 const HISTORY_DAYS = 7;
@@ -43,14 +43,14 @@ export class EventLogger {
   }
 
   /** Searches the last 7 days of JSONL logs for events after the given seq. */
-  readEventsAfter(afterSeq: number, maxCount: number): { sessionId: string; event: SSEHookEvent }[] {
+  readEventsAfter(afterSeq: number, maxCount: number): SessionEvent[] {
     const all = this._parseRecentEvents();
     const filtered = all.filter(e => e.seq > afterSeq);
-    return filtered.slice(0, maxCount).map(({ sessionId, event }) => ({ sessionId, event }));
+    return filtered.slice(0, maxCount).map(({ sessionId, seq, event }) => ({ sessionId, seq, event }));
   }
 
   /** Load the most recent N events — used for server restart recovery. */
-  loadRecentEvents(count: number): { sessionId: string; event: SSEHookEvent; seq: number }[] {
+  loadRecentEvents(count: number): SessionEvent[] {
     const all = this._parseRecentEvents();
     return all.slice(-count);
   }
@@ -178,8 +178,8 @@ export class EventLogger {
     return msg;
   }
 
-  private _parseRecentEvents(): { sessionId: string; event: SSEHookEvent; seq: number }[] {
-    const results: { sessionId: string; event: SSEHookEvent; seq: number }[] = [];
+  private _parseRecentEvents(): SessionEvent[] {
+    const results: SessionEvent[] = [];
     const files = this._getRecentLogFiles();
 
     for (const file of files) {

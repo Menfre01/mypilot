@@ -727,4 +727,139 @@ describe('createServer', () => {
     ws3.close();
     await Promise.all([waitForClose(ws2), waitForClose(ws3)]);
   });
+
+  it('block response with reason persists synthetic UserPromptSubmit', async () => {
+    server = createServer(port, logDir, logDir, TEST_KEY);
+    await server.start();
+
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
+    await waitForMessage(ws, TEST_KEY); // consume initial connected message
+
+    // Switch to takeover mode
+    encSend(ws, TEST_KEY, { type: 'takeover' });
+    const modeMsg = await waitForMessage(ws, TEST_KEY);
+    expect(JSON.parse(modeMsg).mode).toBe('takeover');
+
+    // Post a blocking event (Stop triggers block behavior)
+    const event = JSON.stringify({
+      session_id: 's1',
+      hook_event_name: 'Stop',
+    });
+
+    const messagePromise = new Promise<string>((resolve) => {
+      ws.on('message', (data) => {
+        try {
+          const msg = decRaw(TEST_KEY, data.toString());
+          if (JSON.parse(msg).type === 'event') resolve(msg);
+        } catch { /* ignore */ }
+      });
+    });
+
+    const hookPromise = httpReq(port, 'POST', '/hook', event);
+    const msg = await messagePromise;
+    const parsed = JSON.parse(msg);
+    const eventId = parsed.event.event_id;
+
+    // Respond with block + reason
+    encSend(ws, TEST_KEY, {
+      type: 'interact',
+      sessionId: 's1',
+      eventId,
+      response: { decision: 'block', reason: 'please continue with X' },
+    });
+    await hookPromise;
+
+    // Reconnect — the synthetic UserPromptSubmit should appear in recentEvents
+    ws.close();
+    await waitForClose(ws);
+
+    const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64));
+    const reconnectMsg = await waitForMessage(ws2, TEST_KEY);
+    const reconnectParsed = JSON.parse(reconnectMsg);
+
+    const userPrompts = reconnectParsed.recentEvents.filter(
+      (e: any) => e.event.event_name === 'UserPromptSubmit',
+    );
+    expect(userPrompts.length).toBeGreaterThanOrEqual(1);
+    const synth = userPrompts.find(
+      (e: any) => e.event.prompt === 'please continue with X',
+    );
+    expect(synth).toBeDefined();
+    expect(synth.sessionId).toBe('s1');
+
+    ws2.close();
+    await waitForClose(ws2);
+  });
+
+  it('allow response with answer persists synthetic UserPromptSubmit', async () => {
+    server = createServer(port, logDir, logDir, TEST_KEY);
+    await server.start();
+
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
+    await waitForMessage(ws, TEST_KEY); // consume initial connected message
+
+    // Switch to takeover mode
+    encSend(ws, TEST_KEY, { type: 'takeover' });
+    const modeMsg = await waitForMessage(ws, TEST_KEY);
+    expect(JSON.parse(modeMsg).mode).toBe('takeover');
+
+    // Post a permission request event
+    const event = JSON.stringify({
+      session_id: 's1',
+      hook_event_name: 'PreToolUse',
+      tool_name: 'AskUserQuestion',
+      tool_input: { questions: [{ question: 'Pick one', options: ['A', 'B'] }] },
+    });
+
+    const messagePromise = new Promise<string>((resolve) => {
+      ws.on('message', (data) => {
+        try {
+          const msg = decRaw(TEST_KEY, data.toString());
+          if (JSON.parse(msg).type === 'event') resolve(msg);
+        } catch { /* ignore */ }
+      });
+    });
+
+    const hookPromise = httpReq(port, 'POST', '/hook', event);
+    const msg = await messagePromise;
+    const parsed = JSON.parse(msg);
+    const eventId = parsed.event.event_id;
+
+    // Respond with allow + answer (quiz answer)
+    encSend(ws, TEST_KEY, {
+      type: 'interact',
+      sessionId: 's1',
+      eventId,
+      response: {
+        answer: 'A',
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          updatedInput: { answers: { 'Pick one': 'A' } },
+        },
+      },
+    });
+    await hookPromise;
+
+    // Reconnect — the synthetic UserPromptSubmit should appear in recentEvents
+    ws.close();
+    await waitForClose(ws);
+
+    const ws2 = new WebSocket(wsUrl(port, TEST_KEY_B64));
+    const reconnectMsg = await waitForMessage(ws2, TEST_KEY);
+    const reconnectParsed = JSON.parse(reconnectMsg);
+
+    const userPrompts = reconnectParsed.recentEvents.filter(
+      (e: any) => e.event.event_name === 'UserPromptSubmit',
+    );
+    expect(userPrompts.length).toBeGreaterThanOrEqual(1);
+    const synth = userPrompts.find(
+      (e: any) => e.event.prompt === 'A',
+    );
+    expect(synth).toBeDefined();
+    expect(synth.sessionId).toBe('s1');
+
+    ws2.close();
+    await waitForClose(ws2);
+  });
 });

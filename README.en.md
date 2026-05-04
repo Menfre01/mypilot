@@ -9,7 +9,9 @@ Gateway server for [MyPilot](https://apps.apple.com/hk/app/mypilot/id6762133874)
 [中文](README.md) | English
 </div>
 
-> **Download MyPilot** — iOS: [App Store](https://apps.apple.com/app/mypilot) in most regions (not available in mainland China). Android: [GitHub Releases](https://github.com/Menfre01/mypilot/releases) APK.
+> **Download MyPilot** — iOS: [App Store](https://apps.apple.com/app/mypilot) in most regions (not available in mainland China). Users in mainland China can join via [TestFlight](https://testflight.apple.com/join/gU2Tw8Hg). Android: [GitHub Releases](https://github.com/Menfre01/mypilot/releases) APK.
+>
+> **Try it online** — No gateway deployment needed. Download the app and scan the QR code from the [Demo Gateway](https://mypilot-demo-gateway.menfre.workers.dev/) to explore all features.
 
 MyPilot receives Claude Code hook events and streams them to your phone via WebSocket. In takeover mode, you can approve/deny permissions, answer questions, and submit prompts from your phone.
 
@@ -26,7 +28,7 @@ MyPilot receives Claude Code hook events and streams them to your phone via WebS
 ## Requirements
 
 - **Node.js** >= 20
-- **Client**: [MyPilot iOS App](https://apps.apple.com/app/mypilot) (App Store, most regions) or [Android APK](https://github.com/Menfre01/mypilot/releases/latest)
+- **Client**: [MyPilot iOS App](https://apps.apple.com/app/mypilot) (App Store, most regions), [TestFlight](https://testflight.apple.com/join/gU2Tw8Hg) (mainland China), or [Android APK](https://github.com/Menfre01/mypilot/releases/latest)
 - **Claude Code** CLI — [Installation guide](https://docs.anthropic.com/en/docs/claude-code/overview#installing-claude-code)
 
 ## Quick Start

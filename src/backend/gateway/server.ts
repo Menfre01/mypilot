@@ -8,7 +8,7 @@ import { EventLogger } from './event-logger.js';
 import { PushService } from './push-service.js';
 import type { PushConfigFile } from './push-config.js';
 import { loadGatewayState, saveGatewayState } from './gateway-state.js';
-import { PROTOCOL_VERSION, type GatewayConnected, type ClientMessage } from '../../shared/protocol.js';
+import { PROTOCOL_VERSION, type GatewayConnected, type ClientMessage, type SessionMessage, type SessionEvent, type SSEHookEvent, type TranscriptEntry } from '../../shared/protocol.js';
 import { SessionStreamManager } from './session-stream-manager.js';
 
 export type { PushConfigFile as PushConfig };
@@ -34,40 +34,48 @@ export function createServer(
   const eventLogger = new EventLogger(logDir);
 
   const keyB64 = key.toString('base64');
-  const MAX_RECENT_EVENTS = 200;
+  const MAX_RECENT_EVENTS = 500;
 
   function getRecentEvents(lastEventSeq?: number) {
-    return lastEventSeq != null
-      ? eventLogger.readEventsAfter(lastEventSeq, MAX_RECENT_EVENTS)
-      : hookHandler.getEventHistory();
+    const fromBuffer = sessionStreamManager.getBySource('hook')
+      .map(m => m.event != null ? { sessionId: m.sessionId, seq: m.seq, event: m.event } : undefined)
+      .filter((item): item is SessionEvent => item != null);
+
+    if (fromBuffer.length === 0) {
+      if (lastEventSeq == null) return hookHandler.getEventHistory();
+      return eventLogger.readEventsAfter(lastEventSeq, MAX_RECENT_EVENTS);
+    }
+
+    if (lastEventSeq == null) return fromBuffer;
+
+    // 缓冲区可能不完整（部分条目已被 drain 消费），检查是否存在 gap
+    const minBufferedSeq = fromBuffer[0].seq;
+    if (minBufferedSeq <= lastEventSeq + 1) return fromBuffer;
+
+    const diskEntries = eventLogger.readEventsAfter(lastEventSeq, minBufferedSeq - lastEventSeq);
+    return [...diskEntries, ...fromBuffer].slice(-MAX_RECENT_EVENTS);
   }
 
   function getRecentTranscriptEntries(lastEventSeq?: number) {
-    const fromSeq = lastEventSeq ?? 0;
-    const fromBuffer = sessionStreamManager.getAllTranscriptEntries()
-      .filter(m => m.seq > fromSeq && m.entry)
-      .slice(-MAX_RECENT_EVENTS)
-      .map(m => ({ sessionId: m.sessionId, seq: m.seq, entry: m.entry! }));
+    type TE = { sessionId: string; seq: number; entry: TranscriptEntry };
+    const fromBuffer = sessionStreamManager.getBySource('transcript')
+      .map(m => m.entry != null ? { sessionId: m.sessionId, seq: m.seq, entry: m.entry } : undefined)
+      .filter((item): item is TE => item != null);
 
     if (fromBuffer.length === 0) {
       if (lastEventSeq == null) return [];
-      // 管道缓冲区已淘汰，回退磁盘
+      // 缓冲区已淘汰，回退磁盘
       return eventLogger.readTranscriptEntriesAfter(lastEventSeq, MAX_RECENT_EVENTS);
     }
 
-    // 管道有数据，但可能不完整（部分条目已被 drain 消费），检查 gap
-    if (lastEventSeq != null && lastEventSeq <= sessionStreamManager.maxDrainedSeq) {
-      const minBufferedSeq = fromBuffer[0].seq;
-      if (minBufferedSeq > lastEventSeq + 1) {
-        const diskEntries = eventLogger.readTranscriptEntriesBetween(
-          lastEventSeq, minBufferedSeq,
-        );
-        const merged = [...diskEntries, ...fromBuffer];
-        return merged.slice(-MAX_RECENT_EVENTS);
-      }
-    }
+    if (lastEventSeq == null) return fromBuffer;
 
-    return fromBuffer;
+    // 缓冲区可能不完整（部分条目已被 drain 消费），检查是否存在 gap
+    const minBufferedSeq = fromBuffer[0].seq;
+    if (minBufferedSeq <= lastEventSeq + 1) return fromBuffer;
+
+    const diskEntries = eventLogger.readTranscriptEntriesBetween(lastEventSeq, minBufferedSeq);
+    return [...diskEntries, ...fromBuffer].slice(-MAX_RECENT_EVENTS);
   }
 
   const pushService = pushConfig
@@ -110,8 +118,11 @@ export function createServer(
   hookHandler.setStreamManager(sessionStreamManager);
 
   function drainPipeline(): void {
-    const backlog = sessionStreamManager.bufferedCount;
-    const batchSize = backlog > 300 ? 50 : backlog > 100 ? 30 : 20;
+    const backlog = sessionStreamManager.pipelineSize;
+    let batchSize: number;
+    if (backlog > 300) batchSize = 50;
+    else if (backlog > 100) batchSize = 30;
+    else batchSize = 20;
     const messages = sessionStreamManager.pull(batchSize);
     for (const msg of messages) {
       sessionStreamManager.broadcastMessage(msg);
@@ -231,6 +242,36 @@ export function createServer(
           deviceId, message.sessionId, message.eventId,
           JSON.stringify(message.response).slice(0, 80));
         pendingStore.resolve(message.sessionId, message.eventId, message.response);
+        // Persist synthetic UserPromptSubmit for block+reason or allow+answer,
+        // so the user's response survives reconnects with correct seq ordering.
+        {
+          const resp = message.response as Record<string, unknown> | undefined;
+          let prompt: string | undefined;
+          if (resp?.decision === 'block' && typeof resp.reason === 'string' && resp.reason.length > 0) {
+            prompt = resp.reason;
+          } else if (typeof resp?.answer === 'string' && resp.answer.length > 0) {
+            prompt = resp.answer;
+          }
+          if (prompt) {
+            const seq = sessionStreamManager.nextSeqFn();
+            const synthEvent: SSEHookEvent = {
+              session_id: message.sessionId,
+              event_name: 'UserPromptSubmit',
+              event_id: seq.toString(36),
+              timestamp: Date.now(),
+              prompt,
+            };
+            eventLogger.log(message.sessionId, synthEvent, seq);
+            hookHandler.pushToHistory(message.sessionId, seq, synthEvent);
+            sessionStreamManager.push({
+              sessionId: message.sessionId,
+              seq,
+              timestamp: synthEvent.timestamp as number,
+              source: 'hook',
+              event: synthEvent,
+            });
+          }
+        }
         break;
       case 'request_sessions': {
         broadcastSessionState(message.lastEventSeq, deviceId);
@@ -279,6 +320,9 @@ export function createServer(
       });
       wsBus.onDisconnect((deviceId) => {
         deviceStore.setConnected(deviceId, false);
+      });
+      wsBus.onHeartbeat((deviceId) => {
+        deviceStore.touch(deviceId);
       });
 
       return new Promise((resolve, reject) => {

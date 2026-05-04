@@ -23,7 +23,7 @@ export class TranscriptBridge {
     afterSeq: number,
     maxCount: number,
   ): { sessionId: string; seq: number; entry: TranscriptEntry }[] {
-    const messages = this.streamManager.getAllTranscriptEntries();
+    const messages = this.streamManager.getBySource('transcript');
     return messages
       .filter(m => m.seq > afterSeq && m.entry)
       .slice(-maxCount)

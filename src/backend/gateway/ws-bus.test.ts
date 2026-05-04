@@ -118,6 +118,7 @@ describe('WsBus', () => {
     const message: GatewayMessage = {
       type: 'event',
       sessionId: 's1',
+      seq: 1,
       event: { session_id: 's1', foo: 'bar' },
     };
 

@@ -1,11 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { MessagePipeline } from './message-pipeline.js';
-import type { SessionMessage } from '../../shared/protocol.js';
-
-// ── helpers ──
 
 function makeTranscriptLine(entry: Record<string, unknown>): string {
   return JSON.stringify(entry) + '\n';
@@ -23,11 +20,10 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-// Dynamic import so we don't trigger the module cache for file-system-dependent tests
 async function createTailer(
   pipeline: MessagePipeline,
   seqFn: () => number,
-  options?: { pollIntervalMs?: number; catchUpRetryDelaysMs?: number[]; maxPushRetries?: number; pushRetryDelayMs?: number; onDrop?: (msg: SessionMessage) => void },
+  options?: { pollIntervalMs?: number; catchUpRetryDelaysMs?: number[] },
 ) {
   const { TranscriptTailer } = await import('./transcript-tailer.js');
   return new TranscriptTailer('s1', transcriptPath, pipeline, seqFn, options);
@@ -43,7 +39,7 @@ describe('TranscriptTailer', () => {
     };
     writeFileSync(transcriptPath, makeTranscriptLine(assistantEntry));
 
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq);
     await tailer.start();
@@ -63,7 +59,7 @@ describe('TranscriptTailer', () => {
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'B' }] } }),
     );
 
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq);
     await tailer.start();
@@ -75,28 +71,25 @@ describe('TranscriptTailer', () => {
   });
 
   it('start 文件不存在时重试后放弃', async () => {
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq, {
       catchUpRetryDelaysMs: [10, 20, 40],
     });
 
-    // 文件不存在，所有重试耗尽后应该完成但不推送任何内容
     await tailer.start();
     expect(pipeline.size).toBe(0);
   }, 10000);
 
   it('start 在重试中文件出现后成功读取', async () => {
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq, {
       catchUpRetryDelaysMs: [50, 100],
     });
 
-    // 先启动（文件还不存在）
     const startPromise = tailer.start();
 
-    // 延迟后创建文件
     await new Promise(r => setTimeout(r, 30));
     writeFileSync(transcriptPath,
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'Delayed' }] } }),
@@ -111,7 +104,7 @@ describe('TranscriptTailer', () => {
     const validEntry = { type: 'assistant', message: { content: [{ type: 'text', text: 'Valid' }] } };
     writeFileSync(transcriptPath, makeTranscriptLine(systemEntry) + makeTranscriptLine(validEntry));
 
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq);
     await tailer.start();
@@ -127,7 +120,7 @@ describe('TranscriptTailer', () => {
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'OK' }] } }),
     );
 
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq);
     await tailer.start();
@@ -142,21 +135,18 @@ describe('TranscriptTailer', () => {
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'First' }] } }),
     );
 
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq, { pollIntervalMs: 50 });
     await tailer.start();
 
-    // 排空追赶阶段的条目
     pipeline.pull(10);
     expect(pipeline.size).toBe(0);
 
-    // 追加新行
     appendFileSync(transcriptPath,
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'Second' }] } }),
     );
 
-    // 等待 poll 检测
     await new Promise(r => setTimeout(r, 150));
 
     expect(pipeline.size).toBeGreaterThanOrEqual(1);
@@ -170,24 +160,19 @@ describe('TranscriptTailer', () => {
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'Complete' }] } }),
     );
 
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq, { pollIntervalMs: 50 });
     await tailer.start();
 
-    // 排空
     pipeline.pull(10);
 
-    // 写入不完整行
     const partial = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Partial' }] } });
     appendFileSync(transcriptPath, partial.slice(0, 10));
 
-    // 等待 poll
     await new Promise(r => setTimeout(r, 150));
-    // 不完整行不应该产生新消息
     expect(pipeline.size).toBe(0);
 
-    // 写入剩余部分
     appendFileSync(transcriptPath, partial.slice(10) + '\n');
 
     await new Promise(r => setTimeout(r, 150));
@@ -204,68 +189,56 @@ describe('TranscriptTailer', () => {
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'Original' }] } }),
     );
 
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq, { pollIntervalMs: 50 });
     await tailer.start();
     pipeline.pull(10);
 
-    // 文件被截断（变成空文件）
     writeFileSync(transcriptPath,
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'New' }] } }),
     );
 
     await new Promise(r => setTimeout(r, 150));
 
-    // 管道去重保证同 index 的旧条目被替换
     const msgs = pipeline.pull(10);
     expect(msgs.some(m => m.entry?.blocks.some(b => b.text === 'New'))).toBe(true);
   }, 10000);
 
-  // ── 背压 ──
+  // ── 环形缓冲满时正常 push ──
 
-  it('管道背压时暂停读取并重试', async () => {
+  it('环形缓冲满时 push 逐出最旧并正常继续', async () => {
     writeFileSync(transcriptPath,
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'One' }] } }),
     );
 
-    // 小容量管道，容易触发背压
-    const pipeline = new MessagePipeline({ capacity: 5, highWatermark: 2, lowWatermark: 1 });
+    // 小容量管道
+    const pipeline = new MessagePipeline({ capacity: 3 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq, {
       pollIntervalMs: 50,
     });
     await tailer.start();
 
-    // 排空管道
     pipeline.pull(10);
 
-    // 塞满管道使其背压
-    pipeline.push({
-      sessionId: 's1', seq: 100, timestamp: Date.now(), source: 'hook',
-      event: { session_id: 's1', event_name: 'Notification' },
-    });
-    pipeline.push({
-      sessionId: 's1', seq: 101, timestamp: Date.now(), source: 'hook',
-      event: { session_id: 's1', event_name: 'Notification' },
-    });
-    expect(pipeline.isBackpressured()).toBe(true);
+    // 填满管道
+    for (let i = 0; i < 3; i++) {
+      pipeline.push({
+        sessionId: 's1', seq: 100 + i, timestamp: Date.now(), source: 'hook',
+        event: { session_id: 's1', event_name: 'Notification' },
+      });
+    }
+    expect(pipeline.size).toBe(3);
 
-    // 追加新数据
+    // 追加新数据 — 即使管道满也不拒绝，逐出最旧
     appendFileSync(transcriptPath,
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'Two' }] } }),
     );
 
-    // 等待 poll
     await new Promise(r => setTimeout(r, 200));
 
-    // 消息因为背压无法推入 —— 在背压恢复前应该没有新增 transcript 条目
-    // 排空后 tailer 会重试推入
-    pipeline.pull(10);
-    expect(pipeline.isBackpressured()).toBe(false);
-
-    // 再等一次重试机会
-    await new Promise(r => setTimeout(r, 200));
+    // tailer 的消息已推入管道（环形缓冲逐出最旧后正常接受）
     const msgs = pipeline.pull(10);
     expect(msgs.some(m => m.source === 'transcript')).toBe(true);
   }, 10000);
@@ -277,7 +250,7 @@ describe('TranscriptTailer', () => {
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'Before' }] } }),
     );
 
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq, { pollIntervalMs: 50 });
     await tailer.start();
@@ -286,20 +259,18 @@ describe('TranscriptTailer', () => {
     tailer.stop();
     expect(tailer.stopped).toBe(true);
 
-    // 追加新行
     appendFileSync(transcriptPath,
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'After' }] } }),
     );
 
     await new Promise(r => setTimeout(r, 150));
-    // 停止后不应有新的 transcript 条目
     expect(pipeline.size).toBe(0);
   }, 10000);
 
   // ── stopped getter ──
 
   it('stopped getter 反映停止状态', async () => {
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq);
     expect(tailer.stopped).toBe(false);
@@ -311,25 +282,22 @@ describe('TranscriptTailer', () => {
   // ── 重试耗尽后文件出现 ──
 
   it('start 重试耗尽后文件出现时通过监控捕获', async () => {
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq, {
       catchUpRetryDelaysMs: [10, 20],
       pollIntervalMs: 50,
     });
 
-    // 文件不存在，重试耗尽后会启动监控等待
     await tailer.start();
     expect(pipeline.size).toBe(0);
-    expect(tailer.stopped).toBe(false); // 仍在监控中
+    expect(tailer.stopped).toBe(false);
 
-    // 稍后创建文件
     await new Promise(r => setTimeout(r, 30));
     writeFileSync(transcriptPath,
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'Late' }] } }),
     );
 
-    // 等待 poll 检测到文件
     await new Promise(r => setTimeout(r, 200));
     expect(pipeline.size).toBeGreaterThanOrEqual(1);
     const msgs = pipeline.pull(10);
@@ -343,85 +311,36 @@ describe('TranscriptTailer', () => {
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'Complete' }] } }),
     );
 
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
     const tailer = await createTailer(pipeline, () => ++seq, { pollIntervalMs: 50 });
     await tailer.start();
     pipeline.pull(10);
 
-    // 写入一个不带换行符的完整 JSON 行
     const completeLine = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'NoNewline' }] } });
-    appendFileSync(transcriptPath, completeLine); // 无尾随 \n
+    appendFileSync(transcriptPath, completeLine);
 
-    // 等待 poll 检测并缓冲为 partialLine
     await new Promise(r => setTimeout(r, 150));
-    // partialLine 中有数据但尚未完成
     expect(pipeline.size).toBe(0);
 
-    // stop 应该刷新 partialLine
     tailer.stop();
 
     const msgs = pipeline.pull(10);
     expect(msgs.some(m => m.entry?.blocks.some(b => b.text === 'NoNewline'))).toBe(true);
   }, 10000);
 
-  // ── onDrop 回调 ──
+  // ── _finalFlush 刷新缓冲残余 ──
 
-  it('_pushWithRetry 重试耗尽后调用 onDrop 持久化消息', async () => {
-    writeFileSync(transcriptPath,
-      makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'DropTest' }] } }),
-    );
-
-    // 小容量管道，故意塞满触发背压
-    const pipeline = new MessagePipeline({ capacity: 5, highWatermark: 2, lowWatermark: 1 });
-    // 预填满管道
-    for (let i = 0; i < 3; i++) {
-      pipeline.push({
-        sessionId: 's1', seq: 100 + i, timestamp: Date.now(), source: 'hook',
-        event: { session_id: 's1', event_name: 'Notification' },
-      });
-    }
-    expect(pipeline.isBackpressured()).toBe(true);
-
-    const onDrop = vi.fn();
-    let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq, {
-      maxPushRetries: 2,
-      pushRetryDelayMs: 10,
-      onDrop,
-    });
-
-    await tailer.start();
-    // 等待重试耗尽
-    await new Promise(r => setTimeout(r, 100));
-
-    // onDrop 应该被调用，参数包含被丢弃的消息
-    expect(onDrop).toHaveBeenCalled();
-    const droppedMsg = onDrop.mock.calls[0][0] as SessionMessage;
-    expect(droppedMsg.source).toBe('transcript');
-    expect(droppedMsg.sessionId).toBe('s1');
-    expect(droppedMsg.entry?.blocks.some(b => b.text === 'DropTest')).toBe(true);
-  }, 10000);
-
-  it('maxPushRetries 默认为 10', async () => {
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
-    let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq);
-    expect((tailer as any).maxPushRetries).toBe(10);
-  });
-
-  it('_finalFlush 在 pipeline 背压时将消息传递给 onDrop', async () => {
+  it('_finalFlush 在 stop 时刷新残余消息（管道满时逐出最旧后正常接受）', async () => {
     writeFileSync(transcriptPath,
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'Initial' }] } }),
     );
 
-    const pipeline = new MessagePipeline({ capacity: 20, highWatermark: 15, lowWatermark: 5 });
-    const onDrop = vi.fn();
+    const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq, { onDrop });
+    const tailer = await createTailer(pipeline, () => ++seq);
 
     await tailer.start();
-    // 排空
     pipeline.pull(10);
 
     // 追加新条目
@@ -429,24 +348,18 @@ describe('TranscriptTailer', () => {
       makeTranscriptLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'FlushTest' }] } }),
     );
 
-    // 塞满管道
-    for (let i = 0; i < 16; i++) {
+    // 填满管道
+    for (let i = 0; i < 20; i++) {
       pipeline.push({
         sessionId: 's1', seq: 200 + i, timestamp: Date.now(), source: 'hook',
         event: { session_id: 's1', event_name: 'Notification' },
       });
     }
-    expect(pipeline.isBackpressured()).toBe(true);
 
-    // stop 触发 _finalFlush → push 失败 → onDrop
+    // stop 触发 _finalFlush → 环形缓冲逐出最旧后接受
     tailer.stop();
 
-    // onDrop 应该被调用，参数包含无法推入管道的消息
-    const flushCalls = onDrop.mock.calls.filter(
-      (call: unknown[]) => (call[0] as SessionMessage).source === 'transcript',
-    );
-    expect(flushCalls.length).toBeGreaterThanOrEqual(1);
-    const flushedMsg = flushCalls[0][0] as SessionMessage;
-    expect(flushedMsg.entry?.blocks.some(b => b.text === 'FlushTest')).toBe(true);
+    const msgs = pipeline.pull(50);
+    expect(msgs.some(m => m.entry?.blocks.some(b => b.text === 'FlushTest'))).toBe(true);
   }, 10000);
 });

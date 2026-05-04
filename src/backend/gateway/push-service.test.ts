@@ -70,12 +70,12 @@ describe('PushService', () => {
       };
 
       const promise = pushService.sendPush('device-token-123', payload);
-      // Advance past the retry delay: 0ms delay + 1000ms
-      await vi.advanceTimersByTimeAsync(5_000);
+      // Exponential backoff: 2s + 4s + 8s = 14s total delay across 3 retries
+      await vi.advanceTimersByTimeAsync(20_000);
       const result = await promise;
 
       expect(result).toEqual({ ok: false });
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
     });
 
     it('returns false when response is not ok (after retries)', async () => {
@@ -88,14 +88,29 @@ describe('PushService', () => {
       };
 
       const promise = pushService.sendPush('device-token-123', payload);
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(20_000);
       const result = await promise;
 
       expect(result).toEqual({ ok: false });
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
     });
 
     it.each([429, 401])('does not retry on %i', async (status) => {
+      fetchMock.mockResolvedValue(makeResponse({ ok: false, status }));
+
+      const payload: PushPayload = {
+        sessionId: 'session-1',
+        eventId: 'event-1',
+        eventName: 'Stop',
+      };
+
+      const result = await pushService.sendPush('device-token-123', payload);
+
+      expect(result).toEqual({ ok: false });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([400, 403, 404])('does not retry on 4xx %i', async (status) => {
       fetchMock.mockResolvedValue(makeResponse({ ok: false, status }));
 
       const payload: PushPayload = {

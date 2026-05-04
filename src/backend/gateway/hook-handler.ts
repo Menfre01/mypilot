@@ -14,6 +14,7 @@ import type {
   SSEHookEvent,
   GatewayMessage,
   HookEventName,
+  SessionEvent,
 } from '../../shared/protocol.js';
 import type { SessionStreamManager } from './session-stream-manager.js';
 import type { SessionMessage } from '../../shared/protocol.js';
@@ -42,16 +43,14 @@ export class HookHandler {
   private takeoverOwner: string | null;
   private eventLogger: EventLogger | null;
   private streamManager: SessionStreamManager | null = null;
-  private eventHistory: { sessionId: string; event: SSEHookEvent }[] = [];
+  private eventHistory: SessionEvent[] = [];
   private historyHead = 0;
   private maxHistory = 200;
-  private historyCache: { sessionId: string; event: SSEHookEvent }[] | null = null;
+  private historyCache: SessionEvent[] | null = null;
   private onStateChange?: () => void;
 
   // Serialize handleEvent calls so seq assignment is strictly ordered across
-  // concurrent HTTP requests. When uncontended, proceeds synchronously (no
-  // microtask yield, important for test determinism). Uses a queue of resolvers
-  // to handle any number of concurrent callers without lost wakeups.
+  // concurrent HTTP requests.
   private _processing = false;
   private _nextResolvers: (() => void)[] = [];
 
@@ -82,7 +81,7 @@ export class HookHandler {
     if (this.eventLogger) {
       const recent = this.eventLogger.loadRecentEvents(this.maxHistory);
       for (const entry of recent) {
-        this.eventHistory.push({ sessionId: entry.sessionId, event: entry.event });
+        this.eventHistory.push({ sessionId: entry.sessionId, seq: entry.seq, event: entry.event });
 
         this.sessionStore.register(entry.sessionId);
 
@@ -132,8 +131,15 @@ export class HookHandler {
         timestamp: Date.now(),
       };
 
-      this.pushToHistory(sessionId, hookEvent);
+      this.pushToHistory(sessionId, seq, hookEvent);
       this.eventLogger?.log(sessionId, hookEvent, seq);
+
+      if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
+        const toolUseId = hookEvent.tool_use_id as string | undefined;
+        if (toolUseId) {
+          this.pendingStore.resolveByToolUseId(toolUseId);
+        }
+      }
 
       const sessionMsg: SessionMessage = {
         sessionId,
@@ -144,18 +150,13 @@ export class HookHandler {
       };
 
       // Send push notification before pipeline push — time-sensitive.
-      // Pipeline backpressure must not delay push delivery.
       const isInteractive = this.mode === 'takeover' && (isUserInteractionEvent(eventName) || isInteractivePreToolUse(eventName, hookEvent));
       if (isInteractive) {
         this.trySendPush(sessionId, eventId, hookEvent);
         pendingRequest = { sessionId, eventId, event: hookEvent };
       }
 
-      if (this.streamManager) {
-        if (!this.streamManager.push(sessionMsg)) {
-          throw new HttpError('Service Unavailable — pipeline backpressured', 503);
-        }
-      }
+      this.streamManager?.push(sessionMsg);
 
       if (transcriptPath) {
         this.streamManager?.startSession(sessionId, transcriptPath);
@@ -197,12 +198,12 @@ export class HookHandler {
     }
   }
 
-  private pushToHistory(sessionId: string, event: SSEHookEvent): void {
+  pushToHistory(sessionId: string, seq: number, event: SSEHookEvent): void {
     if (this.eventHistory.length >= this.maxHistory) {
-      this.eventHistory[this.historyHead] = { sessionId, event };
+      this.eventHistory[this.historyHead] = { sessionId, seq, event };
       this.historyHead = (this.historyHead + 1) % this.maxHistory;
     } else {
-      this.eventHistory.push({ sessionId, event });
+      this.eventHistory.push({ sessionId, seq, event });
     }
     this.historyCache = null;
   }
@@ -259,7 +260,7 @@ export class HookHandler {
     return this.takeoverOwner;
   }
 
-  getEventHistory(): { sessionId: string; event: SSEHookEvent }[] {
+  getEventHistory(): SessionEvent[] {
     if (this.historyCache) return this.historyCache;
     if (this.eventHistory.length < this.maxHistory) {
       return this.eventHistory;

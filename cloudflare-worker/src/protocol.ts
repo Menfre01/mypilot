@@ -94,6 +94,7 @@ export interface PendingInteraction {
 
 export interface SessionEvent {
   sessionId: string;
+  seq: number;
   event: SSEHookEvent;
 }
 
@@ -139,6 +140,7 @@ export interface GatewaySessionEnd {
 export interface GatewayEvent {
   type: 'event';
   sessionId: string;
+  seq: number;
   event: SSEHookEvent;
 }
 
@@ -167,7 +169,9 @@ export type ClientMessage =
   | { type: 'request_sessions'; lastEventSeq?: number }
   | { type: 'delete_session'; sessionId: string }
   | { type: 'register_device'; platform: DevicePlatform; locale?: string }
-  | { type: 'register_push'; deviceToken: string; environment?: PushEnvironment };
+  | { type: 'register_push'; deviceToken: string; environment?: PushEnvironment }
+  | { type: 'subscribe_session'; sessionId: string; fromSeq?: number }
+  | { type: 'disconnect' };
 
 // ── Encrypted envelope ──
 

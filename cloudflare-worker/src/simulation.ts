@@ -139,21 +139,27 @@ export function buildDemoScript(): SimStep[] {
   script.push({ delay: 500, action: 'event', sessionId: S3.id, event: { session_id: S3.id, event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'kubectl apply -f deploy/monitoring.yaml' }, tool_use_id: 'call_021', timestamp: ts() } });
   script.push({ delay: 3000, action: 'event', sessionId: S3.id, event: { session_id: S3.id, event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'kubectl apply -f deploy/monitoring.yaml' }, tool_result: 'namespace/monitoring created\ndeployment.apps/grafana created\ndeployment.apps/prometheus created', tool_use_id: 'call_021', timestamp: ts() } });
 
-  // AskUserQuestion blocking event (Session 3)
-  script.push({ delay: 1000, action: 'block', sessionId: S3.id, event: { session_id: S3.id, event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Which environment should I deploy to?', options: [{ label: 'Staging', description: 'Deploy to staging for QA testing' }, { label: 'Production', description: 'Deploy to production environment' }] }], multipleSelect: false }, tool_use_id: 'call_022', timestamp: ts() } });
+  // AskUserQuestion — 单选 (radio) 交互卡片
+  script.push({ delay: 1000, action: 'block', sessionId: S3.id, event: { session_id: S3.id, event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: { prompt: 'Choose the target environment for this deployment.', questions: [{ question: 'Which environment should I deploy to?', header: 'Deployment', multiSelect: false, options: [{ label: 'Staging', description: 'Deploy to staging for QA testing' }, { label: 'Production', description: 'Deploy to production environment' }] }] }, tool_use_id: 'call_022', timestamp: ts() } });
+
+  // ExitPlanMode blocking event (Session 2) — plan ready for review
+  script.push({ delay: 4000, action: 'block', sessionId: S2.id, event: { session_id: S2.id, event_name: 'PreToolUse', tool_name: 'ExitPlanMode', tool_input: { plan: 'Payment module test coverage plan:\n1. Unit tests for createCharge\n2. Integration tests for Stripe API\n3. Webhook handler tests\n4. Error handling scenarios' }, tool_use_id: 'call_017', timestamp: ts() } });
 
   // Elicitation blocking event (Session 2)
-  script.push({ delay: 2000, action: 'block', sessionId: S2.id, event: { session_id: S2.id, event_name: 'Elicitation', message: 'Should I also add integration tests for the webhook handler?', tool_name: 'Elicitation', timestamp: ts() } });
+  script.push({ delay: 4000, action: 'block', sessionId: S2.id, event: { session_id: S2.id, event_name: 'Elicitation', message: 'Should I also add integration tests for the webhook handler?', tool_name: 'Elicitation', timestamp: ts() } });
+
+  // AskUserQuestion — 多选 (checkbox) 交互卡片
+  script.push({ delay: 4000, action: 'block', sessionId: S2.id, event: { session_id: S2.id, event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: { prompt: 'Select the test types to add to the payment module.', questions: [{ question: 'Which test types would you like me to add?', header: 'Test Coverage', multiSelect: true, options: [{ label: 'Unit tests', description: 'Test individual functions in isolation' }, { label: 'Integration tests', description: 'Test interactions between modules' }, { label: 'E2E tests', description: 'End-to-end tests for the full payment flow' }, { label: 'Performance tests', description: 'Benchmark and load testing' }] }] }, tool_use_id: 'call_023', timestamp: ts() } });
 
   // End session 1
-  script.push({ delay: 2000, action: 'end_session', sessionId: S1.id });
+  script.push({ delay: 4000, action: 'end_session', sessionId: S1.id });
 
   // Stop blocking event (Session 3)
-  script.push({ delay: 2000, action: 'block', sessionId: S3.id, event: { session_id: S3.id, event_name: 'Stop', reason: 'Deployment complete. Would you like me to continue setting up alerts?', timestamp: ts() } });
+  script.push({ delay: 4000, action: 'block', sessionId: S3.id, event: { session_id: S3.id, event_name: 'Stop', reason: 'Deployment complete. Would you like me to continue setting up alerts?', timestamp: ts() } });
 
   // End remaining sessions
   script.push({ delay: 2000, action: 'end_session', sessionId: S2.id });
-  script.push({ delay: 2000, action: 'end_session', sessionId: S3.id });
+  script.push({ delay: 4000, action: 'end_session', sessionId: S3.id });
 
   return script;
 }

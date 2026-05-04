@@ -46,6 +46,7 @@
 {
   "type": "event",
   "sessionId": "466561cc-8041-4ff8-8a89-50b321426e8f",
+  "seq": 21365,
   "event": { /* SSEHookEvent — 见下方各节 */ }
 }
 
