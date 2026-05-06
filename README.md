@@ -11,6 +11,19 @@
 
 > **下载 MyPilot** — iOS 版已在 [App Store](https://apps.apple.com/hk/app/mypilot/id6762133874) 海外各大区上架（中国大陆区暂不可用）。大陆用户可通过 [TestFlight](https://testflight.apple.com/join/gU2Tw8Hg) 体验。Android 版可在 [GitHub Releases](https://github.com/Menfre01/mypilot/releases) 下载 APK。
 
+<p align="center">
+  <img src="assets/qrcodes/ios-appstore.png" width="160" alt="iOS App Store 下载" />
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="assets/qrcodes/testflight.png" width="160" alt="TestFlight 下载" />
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="assets/qrcodes/android-apk.png" width="160" alt="Android APK 下载" />
+</p>
+<p align="center">
+  <strong>iOS App Store</strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <strong>TestFlight</strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <strong>Android APK</strong>
+</p>
+
 MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你的手机。在接管模式下，你可以直接在手机上审批权限、回答问题、提交 Prompt。
 
 > **Apple Watch 推送** — 无需额外配置，APNs 推送通知自动镜像到配对的 Apple Watch。蜂窝版手表即使远离 iPhone 也能独立接收推送。手腕上的手表让你随时掌握 Claude Code 运行状态。

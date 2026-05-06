@@ -11,6 +11,19 @@ Gateway server for [MyPilot](https://apps.apple.com/hk/app/mypilot/id6762133874)
 
 > **Download MyPilot** — iOS: [App Store](https://apps.apple.com/app/mypilot) in most regions (not available in mainland China). Users in mainland China can join via [TestFlight](https://testflight.apple.com/join/gU2Tw8Hg). Android: [GitHub Releases](https://github.com/Menfre01/mypilot/releases) APK.
 
+<p align="center">
+  <img src="assets/qrcodes/ios-appstore.png" width="160" alt="iOS App Store" />
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="assets/qrcodes/testflight.png" width="160" alt="TestFlight" />
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="assets/qrcodes/android-apk.png" width="160" alt="Android APK" />
+</p>
+<p align="center">
+  <strong>iOS App Store</strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <strong>TestFlight</strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <strong>Android APK</strong>
+</p>
+
 MyPilot receives Claude Code hook events and streams them to your phone via WebSocket. In takeover mode, you can approve/deny permissions, answer questions, and submit prompts from your phone.
 
 > **Apple Watch push** — APNs notifications are automatically mirrored to your paired Apple Watch with zero configuration. Cellular models receive push independently when away from iPhone. Stay on top of Claude Code activity right from your wrist.
