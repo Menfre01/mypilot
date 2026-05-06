@@ -12,13 +12,8 @@ import { PROTOCOL_VERSION, type GatewayConnected, type ClientMessage, type Sessi
 import { SessionStreamManager } from './session-stream-manager.js';
 import { PetStateStore } from './pet-state-store.js';
 import { TokenStatsStore, parseBrand } from './token-stats-store.js';
-
-function getLocalDate(date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
+import { TailerStateStore } from './tailer-state-store.js';
+import { getLocalDate } from '../../shared/date-utils.js';
 
 export type { PushConfigFile as PushConfig };
 
@@ -43,6 +38,7 @@ export function createServer(
   const eventLogger = new EventLogger(logDir);
   const petStateStore = new PetStateStore(pidDir);
   const tokenStatsStore = new TokenStatsStore(pidDir);
+  const tailerStateStore = new TailerStateStore(pidDir);
 
   const keyB64 = key.toString('base64');
   const MAX_RECENT_EVENTS = 500;
@@ -124,6 +120,7 @@ export function createServer(
 
   const sessionStreamManager = new SessionStreamManager(eventLogger, wsBus, {
     isHidden: (id) => sessionStore.isHidden(id),
+    tailerStateStore,
   });
   sessionStreamManager.recoverSeq(eventLogger);
   hookHandler.setStreamManager(sessionStreamManager);
@@ -378,6 +375,7 @@ export function createServer(
       pendingStore.releaseAll();
       petStateStore.flush();
       tokenStatsStore.flush();
+      tailerStateStore.flush();
       await wsBus.close();
       return new Promise((resolve) => {
         if (httpServer) {

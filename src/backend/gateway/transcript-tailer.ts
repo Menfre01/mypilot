@@ -2,10 +2,12 @@ import { watch, type FSWatcher, closeSync, openSync, readSync, statSync, existsS
 import { dirname } from 'node:path';
 import { parseEntries, classifyEntry, parseTimestamp } from './transcript-reader.js';
 import type { SessionMessage } from '../../shared/protocol.js';
+import type { TailerStateStore } from './tailer-state-store.js';
 
 export interface TailerOptions {
   pollIntervalMs?: number;
   catchUpRetryDelaysMs?: number[];
+  stateStore?: TailerStateStore;
 }
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -17,6 +19,7 @@ export class TranscriptTailer {
   private nextSeqFn: () => number;
   private pollIntervalMs: number;
   private catchUpRetryDelaysMs: number[];
+  private stateStore?: TailerStateStore;
 
   private lastKnownSize = 0;
   private lastReadIndex = 0;
@@ -40,6 +43,7 @@ export class TranscriptTailer {
     this.nextSeqFn = nextSeqFn;
     this.pollIntervalMs = options?.pollIntervalMs ?? 1000;
     this.catchUpRetryDelaysMs = options?.catchUpRetryDelaysMs ?? [200, 400, 800, 1600, 3200];
+    this.stateStore = options?.stateStore;
   }
 
   get stopped(): boolean {
@@ -47,6 +51,11 @@ export class TranscriptTailer {
   }
 
   async start(): Promise<void> {
+    const persistedSize = this.stateStore?.getLastKnownSize(this.transcriptPath);
+    if (persistedSize !== undefined) {
+      this.lastKnownSize = persistedSize;
+    }
+
     let fileReady = false;
     for (const delayMs of this.catchUpRetryDelaysMs) {
       if (existsSync(this.transcriptPath)) {
@@ -60,7 +69,17 @@ export class TranscriptTailer {
       return;
     }
 
-    // 文件存在，执行追赶读取
+    try {
+      const st = statSync(this.transcriptPath);
+      if (st.size <= this.lastKnownSize) {
+        this._startWatching();
+        return;
+      }
+    } catch {
+      this._startWatching();
+      return;
+    }
+
     try {
       const { readTranscript } = await import('./transcript-reader.js');
       const result = await readTranscript(this.transcriptPath, 0);
@@ -79,11 +98,13 @@ export class TranscriptTailer {
       this.lastReadIndex = result.entries.length > 0
         ? result.entries[result.entries.length - 1].index + 1
         : 0;
+      this.stateStore?.setLastKnownSize(this.transcriptPath, this.lastKnownSize);
     } catch {
       if (existsSync(this.transcriptPath)) {
         try {
           const st = statSync(this.transcriptPath);
           this.lastKnownSize = st.size;
+          this.stateStore?.setLastKnownSize(this.transcriptPath, this.lastKnownSize);
         } catch {
           this.lastKnownSize = 0;
         }
@@ -109,8 +130,6 @@ export class TranscriptTailer {
 
     this._stopped = true;
   }
-
-  // ── 内部实现 ──
 
   private _startWatching(): void {
     this.pollTimer = setInterval(() => {
@@ -150,6 +169,7 @@ export class TranscriptTailer {
         this.lastKnownSize = 0;
         this.lastReadIndex = 0;
         this.partialLine = '';
+        this.stateStore?.setLastKnownSize(this.transcriptPath, 0);
       }
 
       if (currentSize <= this.lastKnownSize) return;
@@ -204,6 +224,7 @@ export class TranscriptTailer {
       }
 
       this.lastKnownSize = currentSize;
+      this.stateStore?.setLastKnownSize(this.transcriptPath, currentSize);
     } finally {
       this._reading = false;
     }
@@ -251,12 +272,13 @@ export class TranscriptTailer {
             this.lastReadIndex = entryIndex + 1;
           }
           this.lastKnownSize = currentSize;
+          this.stateStore?.setLastKnownSize(this.transcriptPath, currentSize);
         } finally {
           if (fd !== undefined) try { closeSync(fd); } catch { /* ignore */ }
         }
       }
     } catch {
-      // 文件不可读时跳过
+      /* ignore */
     }
 
     if (this.partialLine.trim()) {

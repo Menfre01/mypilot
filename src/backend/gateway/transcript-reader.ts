@@ -119,9 +119,9 @@ function extractUsage(message: Record<string, unknown>): TokenUsage | undefined 
   if (!usage) return undefined;
   return {
     input_tokens: Math.max(0, toNumber(usage.input_tokens, 0)),
-    output_tokens: toNumber(usage.output_tokens, 0),
-    cache_read_input_tokens: typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : undefined,
-    cache_creation_input_tokens: typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : undefined,
+    output_tokens: Math.max(0, toNumber(usage.output_tokens, 0)),
+    cache_read_input_tokens: typeof usage.cache_read_input_tokens === 'number' ? Math.max(0, usage.cache_read_input_tokens) : undefined,
+    cache_creation_input_tokens: typeof usage.cache_creation_input_tokens === 'number' ? Math.max(0, usage.cache_creation_input_tokens) : undefined,
   };
 }
 

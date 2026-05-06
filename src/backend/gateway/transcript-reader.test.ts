@@ -614,6 +614,33 @@ describe('transcript-reader', () => {
       expect(assistant!.usage!.cache_read_input_tokens).toBe(39936);
     });
 
+    it('clamps negative output_tokens and cache fields to 0', async () => {
+      const toolUseId = 'call_neg_all';
+      const path = setupTranscript([
+        makeTranscriptLine({
+          type: 'assistant',
+          message: {
+            model: 'test-model',
+            usage: {
+              input_tokens: 100,
+              output_tokens: -50,
+              cache_read_input_tokens: -200,
+              cache_creation_input_tokens: -300,
+            },
+            content: [{ type: 'tool_use', id: toolUseId, name: 'Bash', input: {} }],
+          },
+        }),
+      ]);
+
+      const { assistant } = await readToolEntry(path, toolUseId);
+
+      expect(assistant).not.toBeNull();
+      expect(assistant!.usage!.input_tokens).toBe(100);
+      expect(assistant!.usage!.output_tokens).toBe(0);
+      expect(assistant!.usage!.cache_read_input_tokens).toBe(0);
+      expect(assistant!.usage!.cache_creation_input_tokens).toBe(0);
+    });
+
     it('returns undefined for missing usage', async () => {
       const toolUseId = 'call_no_usage';
       const path = setupTranscript([

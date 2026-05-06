@@ -3,6 +3,7 @@ import { TranscriptTailer } from './transcript-tailer.js';
 import { EventLogger } from './event-logger.js';
 import type { WsBus } from './ws-bus.js';
 import type { SessionMessage } from '../../shared/protocol.js';
+import type { TailerStateStore } from './tailer-state-store.js';
 
 export class SessionStreamManager {
   private pipeline: MessagePipeline;
@@ -13,6 +14,7 @@ export class SessionStreamManager {
   private _nextSeq = 0;
   private isHidden: (sessionId: string) => boolean;
   private heldInteractive = new Map<string, { msg: SessionMessage; timer: ReturnType<typeof setTimeout> }>();
+  private tailerStateStore?: TailerStateStore;
   private static readonly INTERACTIVE_HOLD_TIMEOUT_MS = 2000;
 
   constructor(
@@ -21,11 +23,13 @@ export class SessionStreamManager {
     options?: {
       pipelineCapacity?: number;
       isHidden?: (sessionId: string) => boolean;
+      tailerStateStore?: TailerStateStore;
     },
   ) {
     this.isHidden = options?.isHidden ?? (() => false);
     this.eventLogger = eventLogger;
     this.wsBus = wsBus;
+    this.tailerStateStore = options?.tailerStateStore;
     this.pipeline = new MessagePipeline({
       capacity: options?.pipelineCapacity ?? 500,
     });
@@ -52,6 +56,7 @@ export class SessionStreamManager {
       transcriptPath,
       (msg) => this.push(msg),
       () => this.nextSeqFn(),
+      { stateStore: this.tailerStateStore },
     );
     this.tailers.set(sessionId, tailer);
     this.tailerPaths.set(sessionId, transcriptPath);
