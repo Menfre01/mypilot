@@ -328,14 +328,14 @@ describe('HookHandler', () => {
     expect(handler.getTakeoverOwner()).toBe('device-b');
   });
 
-  it('same device re-taking over is no-op', () => {
+  it('same device re-taking over re-broadcasts for client sync', () => {
     const broadcasts = captureBroadcasts(wsBus);
 
     handler.setMode('takeover', 'device-a');
     const msgsAfterFirst = broadcasts.length;
 
     handler.setMode('takeover', 'device-a');
-    expect(broadcasts.length).toBe(msgsAfterFirst); // no extra broadcast
+    expect(broadcasts.length).toBe(msgsAfterFirst + 1); // re-broadcasts to sync client
     expect(handler.getTakeoverOwner()).toBe('device-a');
   });
 

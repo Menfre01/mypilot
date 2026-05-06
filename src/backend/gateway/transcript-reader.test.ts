@@ -589,6 +589,31 @@ describe('transcript-reader', () => {
       expect(assistant!.usage!.cache_creation_input_tokens).toBe(1280);
     });
 
+    it('clamps negative input_tokens to 0', async () => {
+      const toolUseId = 'call_neg';
+      const path = setupTranscript([
+        makeTranscriptLine({
+          type: 'assistant',
+          message: {
+            model: 'deepseek-v4-flash',
+            usage: {
+              input_tokens: -39865,
+              output_tokens: 50,
+              cache_read_input_tokens: 39936,
+            },
+            content: [{ type: 'tool_use', id: toolUseId, name: 'Bash', input: {} }],
+          },
+        }),
+      ]);
+
+      const { assistant } = await readToolEntry(path, toolUseId);
+
+      expect(assistant).not.toBeNull();
+      expect(assistant!.usage!.input_tokens).toBe(0);
+      expect(assistant!.usage!.output_tokens).toBe(50);
+      expect(assistant!.usage!.cache_read_input_tokens).toBe(39936);
+    });
+
     it('returns undefined for missing usage', async () => {
       const toolUseId = 'call_no_usage';
       const path = setupTranscript([

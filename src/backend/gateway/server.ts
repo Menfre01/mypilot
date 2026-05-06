@@ -8,8 +8,17 @@ import { EventLogger } from './event-logger.js';
 import { PushService } from './push-service.js';
 import type { PushConfigFile } from './push-config.js';
 import { loadGatewayState, saveGatewayState } from './gateway-state.js';
-import { PROTOCOL_VERSION, type GatewayConnected, type ClientMessage, type SessionMessage, type SessionEvent, type SSEHookEvent, type TranscriptEntry } from '../../shared/protocol.js';
+import { PROTOCOL_VERSION, type GatewayConnected, type ClientMessage, type SessionMessage, type SessionEvent, type SSEHookEvent, type TranscriptEntry, type PetStatePayload } from '../../shared/protocol.js';
 import { SessionStreamManager } from './session-stream-manager.js';
+import { PetStateStore } from './pet-state-store.js';
+import { TokenStatsStore, parseBrand } from './token-stats-store.js';
+
+function getLocalDate(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 export type { PushConfigFile as PushConfig };
 
@@ -32,6 +41,8 @@ export function createServer(
   const deviceStore = new DeviceStore(savedState?.devices);
   const wsBus = new WsBus(key);
   const eventLogger = new EventLogger(logDir);
+  const petStateStore = new PetStateStore(pidDir);
+  const tokenStatsStore = new TokenStatsStore(pidDir);
 
   const keyB64 = key.toString('base64');
   const MAX_RECENT_EVENTS = 500;
@@ -124,9 +135,27 @@ export function createServer(
     else if (backlog > 100) batchSize = 30;
     else batchSize = 20;
     const messages = sessionStreamManager.pull(batchSize);
+    let lastPetState: PetStatePayload | undefined;
+    const today = getLocalDate();
     for (const msg of messages) {
       sessionStreamManager.broadcastMessage(msg);
       eventLogger.logSessionMessage(msg);
+
+      if (msg.source === 'transcript' && msg.entry?.usage && msg.entry?.model) {
+        const usage = msg.entry.usage;
+        const model = msg.entry.model;
+        lastPetState = petStateStore.feed(usage);
+        const brand = parseBrand(model);
+        tokenStatsStore.record(today, brand, model, {
+          input: usage.input_tokens,
+          output: usage.output_tokens,
+          cacheRead: usage.cache_read_input_tokens ?? 0,
+          cacheCreation: usage.cache_creation_input_tokens ?? 0,
+        });
+      }
+    }
+    if (lastPetState) {
+      wsBus.broadcast({ type: 'pet_state_update', state: lastPetState });
     }
   }
 
@@ -221,6 +250,8 @@ export function createServer(
       pendingInteractions,
       takeoverOwner: hookHandler.getTakeoverOwner() ?? undefined,
       transcriptEntries: transcriptEntries.length > 0 ? transcriptEntries : undefined,
+      petState: petStateStore.getState(),
+      tokenStats: tokenStatsStore.getStats('today'),
     };
     wsBus.sendSessionList(msg, targetDeviceId);
   }
@@ -299,6 +330,16 @@ export function createServer(
         deviceStore.setConnected(deviceId, false);
         wsBus.disconnect(deviceId);
         break;
+      case 'readopt': {
+        const newState = petStateStore.readopt();
+        wsBus.broadcast({ type: 'pet_state_update', state: newState });
+        break;
+      }
+      case 'request_token_stats': {
+        const stats = tokenStatsStore.getStats(message.range);
+        wsBus.broadcast({ type: 'token_stats_update', stats });
+        break;
+      }
     }
   }
 
@@ -335,6 +376,8 @@ export function createServer(
       clearInterval(staleCleanup);
       sessionStreamManager.shutdown();
       pendingStore.releaseAll();
+      petStateStore.flush();
+      tokenStatsStore.flush();
       await wsBus.close();
       return new Promise((resolve) => {
         if (httpServer) {

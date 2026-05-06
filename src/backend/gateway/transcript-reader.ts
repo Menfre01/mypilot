@@ -118,7 +118,7 @@ function extractUsage(message: Record<string, unknown>): TokenUsage | undefined 
   const usage = message.usage as Record<string, unknown> | undefined;
   if (!usage) return undefined;
   return {
-    input_tokens: toNumber(usage.input_tokens, 0),
+    input_tokens: Math.max(0, toNumber(usage.input_tokens, 0)),
     output_tokens: toNumber(usage.output_tokens, 0),
     cache_read_input_tokens: typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : undefined,
     cache_creation_input_tokens: typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : undefined,
