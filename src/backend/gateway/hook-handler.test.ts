@@ -581,7 +581,7 @@ describe('HookHandler', () => {
       expect(endMsg).toBeDefined();
     });
 
-    it('交互式 PreToolUse (AskUserQuestion) 仍推送到管道并阻塞 takeover', async () => {
+    it('交互式 PreToolUse (AskUserQuestion) 暂存等待 transcript 条目，到达后释放并阻塞 takeover', async () => {
       handler.setMode('takeover');
 
       const promise = handler.handleEvent(makeEvent('PreToolUse', 's1', {
@@ -592,13 +592,40 @@ describe('HookHandler', () => {
 
       await Promise.resolve();
 
-      // 事件进入管道
-      const msgs = streamManager.pull(10);
-      expect(msgs.some(m => m.event?.tool_name === 'AskUserQuestion')).toBe(true);
+      // 事件暂存在 holdInteractive 中，尚未进入管道
+      const msgsBefore = streamManager.pull(10);
+      expect(msgsBefore.some(m => m.event?.tool_name === 'AskUserQuestion')).toBe(false);
 
       // takeover 模式下阻塞等待
       const pending = handler.getPendingInteractions();
       expect(pending.length).toBeGreaterThanOrEqual(1);
+
+      // 模拟 transcript 条目到达（包含同一 tool_use_id），seq 通过 nextSeqFn 获取
+      const transcriptSeq = streamManager.nextSeqFn();
+      streamManager.push({
+        sessionId: 's1',
+        seq: transcriptSeq,
+        timestamp: Date.now(),
+        source: 'transcript',
+        entry: {
+          index: 5,
+          type: 'assistant',
+          timestamp: Date.now(),
+          blocks: [
+            { type: 'text', text: 'Which one?' },
+            { type: 'tool_use', id: 'tu_aq', name: 'AskUserQuestion', input: {} },
+          ],
+        },
+      });
+
+      // 现在 事件 应已释放到管道，seq 在 transcript 之后
+      const msgsAfter = streamManager.pull(10);
+      const hookMsg = msgsAfter.find(m => m.event?.tool_name === 'AskUserQuestion');
+      expect(hookMsg).toBeDefined();
+      const transcriptMsg = msgsAfter.find(m => m.source === 'transcript' && m.entry?.blocks.some(b => b.id === 'tu_aq'));
+      expect(transcriptMsg).toBeDefined();
+      // transcript 条目的 seq 应小于 hook 事件的 seq（确保先显示问题再显示选项）
+      expect(transcriptMsg!.seq).toBeLessThan(hookMsg!.seq);
 
       // 恢复 pending
       const eventId = pending[0].eventId;

@@ -12,6 +12,8 @@ export class SessionStreamManager {
   private tailerPaths = new Map<string, string>();
   private _nextSeq = 0;
   private isHidden: (sessionId: string) => boolean;
+  private heldInteractive = new Map<string, { msg: SessionMessage; timer: ReturnType<typeof setTimeout> }>();
+  private static readonly INTERACTIVE_HOLD_TIMEOUT_MS = 2000;
 
   constructor(
     eventLogger: EventLogger,
@@ -48,7 +50,7 @@ export class SessionStreamManager {
     const tailer = new TranscriptTailer(
       sessionId,
       transcriptPath,
-      this.pipeline,
+      (msg) => this.push(msg),
       () => this.nextSeqFn(),
     );
     this.tailers.set(sessionId, tailer);
@@ -69,6 +71,41 @@ export class SessionStreamManager {
 
   push(msg: SessionMessage): void {
     this.pipeline.push(msg);
+
+    // 当 transcript 条目包含 tool_use 时，检查是否有等待中的交互式 hook 事件
+    if (msg.source === 'transcript' && msg.entry) {
+      for (const block of msg.entry.blocks) {
+        if (block.type === 'tool_use' && block.id) {
+          const key = `${msg.sessionId}:${block.id}`;
+          const held = this.heldInteractive.get(key);
+          if (held) {
+            clearTimeout(held.timer);
+            this.heldInteractive.delete(key);
+            // 重新分配 seq 使交互事件排在 transcript 条目之后
+            held.msg.seq = this.nextSeqFn();
+            this.pipeline.push(held.msg);
+          }
+        }
+      }
+    }
+  }
+
+  /** 暂存交互式 PreToolUse 事件，等待对应 transcript 条目到达后再释放到管道。 */
+  holdInteractive(msg: SessionMessage): void {
+    const toolUseId = msg.event?.tool_use_id as string | undefined;
+    if (!toolUseId) {
+      this.pipeline.push(msg);
+      return;
+    }
+
+    const key = `${msg.sessionId}:${toolUseId}`;
+
+    const timer = setTimeout(() => {
+      this.heldInteractive.delete(key);
+      this.pipeline.push(msg);
+    }, SessionStreamManager.INTERACTIVE_HOLD_TIMEOUT_MS);
+
+    this.heldInteractive.set(key, { msg, timer });
   }
 
   // ── 消费者接口 ──
@@ -150,6 +187,10 @@ export class SessionStreamManager {
   // ── 生命周期 ──
 
   shutdown(): void {
+    for (const [, held] of this.heldInteractive) {
+      clearTimeout(held.timer);
+    }
+    this.heldInteractive.clear();
     for (const [sessionId, tailer] of this.tailers) {
       tailer.stop();
     }

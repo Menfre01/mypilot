@@ -21,12 +21,12 @@ afterEach(() => {
 });
 
 async function createTailer(
-  pipeline: MessagePipeline,
+  onPush: (msg: import('../../shared/protocol.js').SessionMessage) => void,
   seqFn: () => number,
   options?: { pollIntervalMs?: number; catchUpRetryDelaysMs?: number[] },
 ) {
   const { TranscriptTailer } = await import('./transcript-tailer.js');
-  return new TranscriptTailer('s1', transcriptPath, pipeline, seqFn, options);
+  return new TranscriptTailer('s1', transcriptPath, onPush, seqFn, options);
 }
 
 describe('TranscriptTailer', () => {
@@ -41,7 +41,7 @@ describe('TranscriptTailer', () => {
 
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq);
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq);
     await tailer.start();
 
     expect(pipeline.size).toBe(1);
@@ -61,7 +61,7 @@ describe('TranscriptTailer', () => {
 
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq);
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq);
     await tailer.start();
 
     const msgs = pipeline.pull(10);
@@ -73,7 +73,7 @@ describe('TranscriptTailer', () => {
   it('start 文件不存在时重试后放弃', async () => {
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq, {
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq, {
       catchUpRetryDelaysMs: [10, 20, 40],
     });
 
@@ -84,7 +84,7 @@ describe('TranscriptTailer', () => {
   it('start 在重试中文件出现后成功读取', async () => {
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq, {
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq, {
       catchUpRetryDelaysMs: [50, 100],
     });
 
@@ -106,7 +106,7 @@ describe('TranscriptTailer', () => {
 
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq);
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq);
     await tailer.start();
 
     expect(pipeline.size).toBe(1);
@@ -122,7 +122,7 @@ describe('TranscriptTailer', () => {
 
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq);
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq);
     await tailer.start();
 
     expect(pipeline.size).toBe(1);
@@ -137,7 +137,7 @@ describe('TranscriptTailer', () => {
 
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq, { pollIntervalMs: 50 });
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq, { pollIntervalMs: 50 });
     await tailer.start();
 
     pipeline.pull(10);
@@ -162,7 +162,7 @@ describe('TranscriptTailer', () => {
 
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq, { pollIntervalMs: 50 });
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq, { pollIntervalMs: 50 });
     await tailer.start();
 
     pipeline.pull(10);
@@ -191,7 +191,7 @@ describe('TranscriptTailer', () => {
 
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq, { pollIntervalMs: 50 });
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq, { pollIntervalMs: 50 });
     await tailer.start();
     pipeline.pull(10);
 
@@ -215,7 +215,7 @@ describe('TranscriptTailer', () => {
     // 小容量管道
     const pipeline = new MessagePipeline({ capacity: 3 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq, {
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq, {
       pollIntervalMs: 50,
     });
     await tailer.start();
@@ -252,7 +252,7 @@ describe('TranscriptTailer', () => {
 
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq, { pollIntervalMs: 50 });
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq, { pollIntervalMs: 50 });
     await tailer.start();
     pipeline.pull(10);
 
@@ -272,7 +272,7 @@ describe('TranscriptTailer', () => {
   it('stopped getter 反映停止状态', async () => {
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq);
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq);
     expect(tailer.stopped).toBe(false);
 
     tailer.stop();
@@ -284,7 +284,7 @@ describe('TranscriptTailer', () => {
   it('start 重试耗尽后文件出现时通过监控捕获', async () => {
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq, {
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq, {
       catchUpRetryDelaysMs: [10, 20],
       pollIntervalMs: 50,
     });
@@ -313,7 +313,7 @@ describe('TranscriptTailer', () => {
 
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq, { pollIntervalMs: 50 });
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq, { pollIntervalMs: 50 });
     await tailer.start();
     pipeline.pull(10);
 
@@ -338,7 +338,7 @@ describe('TranscriptTailer', () => {
 
     const pipeline = new MessagePipeline({ capacity: 20 });
     let seq = 0;
-    const tailer = await createTailer(pipeline, () => ++seq);
+    const tailer = await createTailer((msg) => pipeline.push(msg), () => ++seq);
 
     await tailer.start();
     pipeline.pull(10);

@@ -1,7 +1,6 @@
 import { watch, type FSWatcher, closeSync, openSync, readSync, statSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { parseEntries, classifyEntry, parseTimestamp } from './transcript-reader.js';
-import type { MessagePipeline } from './message-pipeline.js';
 import type { SessionMessage } from '../../shared/protocol.js';
 
 export interface TailerOptions {
@@ -14,7 +13,7 @@ const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 export class TranscriptTailer {
   private sessionId: string;
   private transcriptPath: string;
-  private pipeline: MessagePipeline;
+  private onPush: (msg: SessionMessage) => void;
   private nextSeqFn: () => number;
   private pollIntervalMs: number;
   private catchUpRetryDelaysMs: number[];
@@ -31,13 +30,13 @@ export class TranscriptTailer {
   constructor(
     sessionId: string,
     transcriptPath: string,
-    pipeline: MessagePipeline,
+    onPush: (msg: SessionMessage) => void,
     nextSeqFn: () => number,
     options?: TailerOptions,
   ) {
     this.sessionId = sessionId;
     this.transcriptPath = transcriptPath;
-    this.pipeline = pipeline;
+    this.onPush = onPush;
     this.nextSeqFn = nextSeqFn;
     this.pollIntervalMs = options?.pollIntervalMs ?? 1000;
     this.catchUpRetryDelaysMs = options?.catchUpRetryDelaysMs ?? [200, 400, 800, 1600, 3200];
@@ -74,7 +73,7 @@ export class TranscriptTailer {
           source: 'transcript',
           entry,
         };
-        this.pipeline.push(msg);
+        this.onPush(msg);
       }
       this.lastKnownSize = result.fileSize;
       this.lastReadIndex = result.entries.length > 0
@@ -195,7 +194,7 @@ export class TranscriptTailer {
             },
           };
 
-          this.pipeline.push(msg);
+          this.onPush(msg);
           this.lastReadIndex = entryIndex + 1;
         }
       } finally {
@@ -248,7 +247,7 @@ export class TranscriptTailer {
                 blocks: parsed.blocks,
               },
             };
-            this.pipeline.push(msg);
+            this.onPush(msg);
             this.lastReadIndex = entryIndex + 1;
           }
           this.lastKnownSize = currentSize;
@@ -280,7 +279,7 @@ export class TranscriptTailer {
               blocks: parsed.blocks,
             },
           };
-          this.pipeline.push(msg);
+          this.onPush(msg);
         }
       } catch {
         // 真正不完整的行，丢弃

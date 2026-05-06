@@ -156,7 +156,12 @@ export class HookHandler {
         pendingRequest = { sessionId, eventId, event: hookEvent };
       }
 
-      this.streamManager?.push(sessionMsg);
+      // 交互式 PreToolUse 暂存以等待对应 transcript 条目先到达，保证问题文本在选项卡片之前显示
+      if (isInteractivePreToolUse(eventName, hookEvent)) {
+        this.streamManager?.holdInteractive(sessionMsg);
+      } else {
+        this.streamManager?.push(sessionMsg);
+      }
 
       if (transcriptPath) {
         this.streamManager?.startSession(sessionId, transcriptPath);
