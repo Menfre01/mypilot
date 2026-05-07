@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import type { TokenBreakdown, TokenStatsPayload } from '../../shared/protocol.js';
-import { getLocalDate } from '../../shared/date-utils.js';
+import { SYNTHETIC_MODEL, type TokenBreakdown, type TokenStatsPayload } from '../../shared/protocol.js';
+import { getLocalDate, getWeekStart, getMonthStart } from '../../shared/date-utils.js';
 
 const TOKEN_STATS_FILE = 'token-stats.json';
 const MAX_RETENTION_DAYS = 90;
@@ -106,6 +106,7 @@ export class TokenStatsStore {
   }
 
   record(date: string, brand: string, model: string, usage: TokenBreakdown): void {
+    if (model === SYNTHETIC_MODEL) return;
     const dateRecords = this.state.records[date];
     if (!dateRecords) {
       this.state.records[date] = { [brand]: { [model]: { ...usage } } };
@@ -144,10 +145,7 @@ export class TokenStatsStore {
       };
     }
 
-    const nowMs = Date.now();
-    const days = range === 'week' ? 7 : 30;
-    const cutoffMs = nowMs - days * 86400000;
-    const cutoffDate = getLocalDate(new Date(cutoffMs));
+    const cutoffDate = range === 'week' ? getWeekStart() : getMonthStart();
 
     const filtered: InternalRecords = {};
     for (const [date, brands] of Object.entries(this.state.records)) {

@@ -10,9 +10,9 @@ const TOKEN_WEIGHT_CACHE_READ = 0.05;
 const TOKEN_WEIGHT_CACHE_CREATION = 0.05;
 
 const SATIETY_MAX = 100;
-const SATIETY_DENOMINATOR = 3_750_000;
-const DECAY_RATE_NORMAL = 8 / 24;
-const DECAY_RATE_OVERWORK = 16 / 24;
+const SATIETY_DENOMINATOR = 1_000_000;
+const DECAY_RATE_NORMAL = 16 / 24;
+const DECAY_RATE_OVERWORK = 32 / 24;
 
 const HEALTHY_MIN = 68;
 const SICK_MIN = 30;
@@ -175,7 +175,7 @@ export class PetStateStore {
       hearts: Math.round(this.state.satiety / SATIETY_PER_HEART) * HEART_INCREMENT,
       stage: this.state.stage,
       health: this.state.health,
-      lastFedAt: msToISO(this.state.lastDecayAt),
+      lastFedAt: msToISO(this.state.lastFeedAtMs),
       isOverwork: this.state.isOverwork,
       overworkStartedAt: msToISO(this.state.overworkStartedAt),
       feedWindowStart: msToISO(this.state.feedWindowStart),

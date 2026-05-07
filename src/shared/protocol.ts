@@ -3,6 +3,9 @@
 /** Current protocol version. MAJOR bump = breaking changes (reject old clients). */
 export const PROTOCOL_VERSION = 3;
 
+/** Sentinel model name for synthetic/placeholder transcript entries that should not be tracked. */
+export const SYNTHETIC_MODEL = '<synthetic>';
+
 // ── Pairing ──
 
 export const VALID_LINK_TYPES = ['lan', 'tunnel'] as const;

@@ -3,18 +3,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TokenStatsStore, parseBrand } from './token-stats-store.js';
-
-function getLocalDate(date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
+import { getLocalDate, getWeekStart, getMonthStart } from '../../shared/date-utils.js';
 
 const TODAY = getLocalDate();
 const YESTERDAY = getLocalDate(new Date(Date.now() - 86400000));
-const THREE_DAYS_AGO = getLocalDate(new Date(Date.now() - 3 * 86400000));
-const TEN_DAYS_AGO = getLocalDate(new Date(Date.now() - 10 * 86400000));
+const WEEK_START = getWeekStart();
+const MONTH_START = getMonthStart();
+const LAST_WEEK_END = getLocalDate(new Date(new Date(WEEK_START).getTime() - 86400000));
+const LAST_MONTH_END = getLocalDate(new Date(new Date(MONTH_START).getTime() - 86400000));
 
 describe('parseBrand', () => {
   it('identifies known brands', () => {
@@ -111,14 +107,35 @@ describe('TokenStatsStore', () => {
     expect(Object.keys(stats.records)).toEqual([TODAY]);
   });
 
-  it('getStats week returns last 7 days', () => {
+  it('getStats week returns natural week (Mon to today)', () => {
     store.record(TODAY, 'a', 'm', { input: 1, output: 0, cacheRead: 0, cacheCreation: 0 });
-    store.record(THREE_DAYS_AGO, 'a', 'm', { input: 2, output: 0, cacheRead: 0, cacheCreation: 0 });
-    store.record(TEN_DAYS_AGO, 'a', 'm', { input: 3, output: 0, cacheRead: 0, cacheCreation: 0 });
+    store.record(WEEK_START, 'a', 'm', { input: 2, output: 0, cacheRead: 0, cacheCreation: 0 });
+    store.record(LAST_WEEK_END, 'a', 'm', { input: 3, output: 0, cacheRead: 0, cacheCreation: 0 });
 
     const stats = store.getStats('week');
-    expect(Object.keys(stats.records)).toContain(TODAY);
-    expect(Object.keys(stats.records)).toContain(THREE_DAYS_AGO);
-    expect(Object.keys(stats.records)).not.toContain(TEN_DAYS_AGO);
+    const dates = Object.keys(stats.records);
+    expect(dates).toContain(TODAY);
+    expect(dates).toContain(WEEK_START);
+    expect(dates).not.toContain(LAST_WEEK_END);
+    // 所有日期都在本周范围内
+    for (const d of dates) {
+      expect(d >= WEEK_START).toBe(true);
+    }
+  });
+
+  it('getStats month returns natural month (1st to today)', () => {
+    store.record(TODAY, 'a', 'm', { input: 1, output: 0, cacheRead: 0, cacheCreation: 0 });
+    store.record(MONTH_START, 'a', 'm', { input: 2, output: 0, cacheRead: 0, cacheCreation: 0 });
+    store.record(LAST_MONTH_END, 'a', 'm', { input: 3, output: 0, cacheRead: 0, cacheCreation: 0 });
+
+    const stats = store.getStats('month');
+    const dates = Object.keys(stats.records);
+    expect(dates).toContain(TODAY);
+    expect(dates).toContain(MONTH_START);
+    expect(dates).not.toContain(LAST_MONTH_END);
+    // 所有日期都在本月范围内
+    for (const d of dates) {
+      expect(d >= MONTH_START).toBe(true);
+    }
   });
 });

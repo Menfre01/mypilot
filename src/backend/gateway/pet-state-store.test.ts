@@ -54,11 +54,11 @@ describe('PetStateStore', () => {
       expect(state.satiety).toBe(100);
     });
 
-    it('decays 8 points after 24 hours', () => {
+    it('decays 16 points after 24 hours', () => {
       const store = new PetStateStore(dir);
       store.feed({ input_tokens: 0, output_tokens: 0 }, 0);
       const state = store.getState(24 * 3_600_000);
-      expect(state.satiety).toBe(92);
+      expect(state.satiety).toBe(84);
     });
 
     it('decays 16 points after 24 hours when overwork', () => {
@@ -85,7 +85,7 @@ describe('PetStateStore', () => {
       store.feed({ input_tokens: 0, output_tokens: 0 }, 0);
       store.getState(24 * 3_600_000);
       const state2 = store.getState(24 * 3_600_000);
-      expect(state2.satiety).toBe(92);
+      expect(state2.satiety).toBe(84);
     });
   });
 
@@ -110,7 +110,7 @@ describe('PetStateStore', () => {
     it('satiety 29 → critical', () => {
       const store = new PetStateStore(dir);
       store.feed({ input_tokens: 0, output_tokens: 0 }, 0);
-      const state = store.getState(240 * 3_600_000);
+      const state = store.getState(130 * 3_600_000);
       expect(state.satiety).toBeLessThan(30);
       expect(state.satiety).toBeGreaterThanOrEqual(1);
       expect(state.health).toBe('critical');
@@ -127,13 +127,13 @@ describe('PetStateStore', () => {
   });
 
   describe('Feeding', () => {
-    it('3.75M weighted tokens = +1 satiety', () => {
+    it('1M weighted tokens = +1 satiety', () => {
       const store = new PetStateStore(dir);
       store.feed({ input_tokens: 0, output_tokens: 0 }, 0);
       store.getState(12 * 3_600_000);
       store.feed({ input_tokens: 0, output_tokens: 3_750_000 }, 12 * 3_600_000);
       const state = store.getState(12 * 3_600_000);
-      expect(state.satiety).toBe(97);
+      expect(state.satiety).toBe(96);
     });
 
     it('satiety capped at 100', () => {

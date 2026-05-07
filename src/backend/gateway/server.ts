@@ -8,7 +8,7 @@ import { EventLogger } from './event-logger.js';
 import { PushService } from './push-service.js';
 import type { PushConfigFile } from './push-config.js';
 import { loadGatewayState, saveGatewayState } from './gateway-state.js';
-import { PROTOCOL_VERSION, type GatewayConnected, type ClientMessage, type SessionMessage, type SessionEvent, type SSEHookEvent, type TranscriptEntry, type PetStatePayload } from '../../shared/protocol.js';
+import { PROTOCOL_VERSION, SYNTHETIC_MODEL, type GatewayConnected, type ClientMessage, type SessionMessage, type SessionEvent, type SSEHookEvent, type TranscriptEntry, type PetStatePayload } from '../../shared/protocol.js';
 import { SessionStreamManager } from './session-stream-manager.js';
 import { PetStateStore } from './pet-state-store.js';
 import { TokenStatsStore, parseBrand } from './token-stats-store.js';
@@ -138,7 +138,7 @@ export function createServer(
       sessionStreamManager.broadcastMessage(msg);
       eventLogger.logSessionMessage(msg);
 
-      if (msg.source === 'transcript' && msg.entry?.usage && msg.entry?.model) {
+      if (msg.source === 'transcript' && msg.entry?.usage && msg.entry?.model && msg.entry.model !== SYNTHETIC_MODEL) {
         const usage = msg.entry.usage;
         const model = msg.entry.model;
         lastPetState = petStateStore.feed(usage);
@@ -160,6 +160,18 @@ export function createServer(
 
   const SESSION_STALE_MS = 24 * 60 * 60_000;
   const staleCleanup = setInterval(cleanupStaleSessions, 60_000);
+
+  let lastBroadcastSatiety = -1;
+  let lastBroadcastHealth = '';
+  const PET_BROADCAST_INTERVAL_MS = 5 * 60_000;
+  const petBroadcast = setInterval(() => {
+    const state = petStateStore.getState();
+    if (state.satiety !== lastBroadcastSatiety || state.health !== lastBroadcastHealth) {
+      lastBroadcastSatiety = state.satiety;
+      lastBroadcastHealth = state.health;
+      wsBus.broadcast({ type: 'pet_state_update', state });
+    }
+  }, PET_BROADCAST_INTERVAL_MS);
 
   let httpServer: Server;
 
@@ -371,6 +383,7 @@ export function createServer(
 
     async stop(): Promise<void> {
       clearInterval(staleCleanup);
+      clearInterval(petBroadcast);
       sessionStreamManager.shutdown();
       pendingStore.releaseAll();
       petStateStore.flush();
