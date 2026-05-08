@@ -8,9 +8,8 @@ import { EventLogger } from './event-logger.js';
 import { PushService } from './push-service.js';
 import type { PushConfigFile } from './push-config.js';
 import { loadGatewayState, saveGatewayState } from './gateway-state.js';
-import { PROTOCOL_VERSION, SYNTHETIC_MODEL, type GatewayConnected, type ClientMessage, type SessionMessage, type SessionEvent, type SSEHookEvent, type TranscriptEntry, type PetStatePayload } from '../../shared/protocol.js';
+import { PROTOCOL_VERSION, SYNTHETIC_MODEL, type GatewayConnected, type ClientMessage, type SessionEvent, type SSEHookEvent, type TranscriptEntry } from '../../shared/protocol.js';
 import { SessionStreamManager } from './session-stream-manager.js';
-import { PetStateStore } from './pet-state-store.js';
 import { TokenStatsStore, parseBrand } from './token-stats-store.js';
 import { TailerStateStore } from './tailer-state-store.js';
 import { getLocalDate } from '../../shared/date-utils.js';
@@ -36,7 +35,6 @@ export function createServer(
   const deviceStore = new DeviceStore(savedState?.devices);
   const wsBus = new WsBus(key);
   const eventLogger = new EventLogger(logDir);
-  const petStateStore = new PetStateStore(pidDir);
   const tokenStatsStore = new TokenStatsStore(pidDir);
   const tailerStateStore = new TailerStateStore(pidDir);
 
@@ -132,7 +130,6 @@ export function createServer(
     else if (backlog > 100) batchSize = 30;
     else batchSize = 20;
     const messages = sessionStreamManager.pull(batchSize);
-    let lastPetState: PetStatePayload | undefined;
     const today = getLocalDate();
     for (const msg of messages) {
       sessionStreamManager.broadcastMessage(msg);
@@ -141,7 +138,6 @@ export function createServer(
       if (msg.source === 'transcript' && msg.entry?.usage && msg.entry?.model && msg.entry.model !== SYNTHETIC_MODEL) {
         const usage = msg.entry.usage;
         const model = msg.entry.model;
-        lastPetState = petStateStore.feed(usage);
         const brand = parseBrand(model);
         tokenStatsStore.record(today, brand, model, {
           input: usage.input_tokens,
@@ -151,27 +147,12 @@ export function createServer(
         });
       }
     }
-    if (lastPetState) {
-      wsBus.broadcast({ type: 'pet_state_update', state: lastPetState });
-    }
   }
 
   sessionStreamManager.onDrain(drainPipeline);
 
   const SESSION_STALE_MS = 24 * 60 * 60_000;
   const staleCleanup = setInterval(cleanupStaleSessions, 60_000);
-
-  let lastBroadcastSatiety = -1;
-  let lastBroadcastHealth = '';
-  const PET_BROADCAST_INTERVAL_MS = 5 * 60_000;
-  const petBroadcast = setInterval(() => {
-    const state = petStateStore.getState();
-    if (state.satiety !== lastBroadcastSatiety || state.health !== lastBroadcastHealth) {
-      lastBroadcastSatiety = state.satiety;
-      lastBroadcastHealth = state.health;
-      wsBus.broadcast({ type: 'pet_state_update', state });
-    }
-  }, PET_BROADCAST_INTERVAL_MS);
 
   let httpServer: Server;
 
@@ -259,7 +240,6 @@ export function createServer(
       pendingInteractions,
       takeoverOwner: hookHandler.getTakeoverOwner() ?? undefined,
       transcriptEntries: transcriptEntries.length > 0 ? transcriptEntries : undefined,
-      petState: petStateStore.getState(),
       tokenStats: tokenStatsStore.getStats('today'),
     };
     wsBus.sendSessionList(msg, targetDeviceId);
@@ -339,11 +319,6 @@ export function createServer(
         deviceStore.setConnected(deviceId, false);
         wsBus.disconnect(deviceId);
         break;
-      case 'readopt': {
-        const newState = petStateStore.readopt();
-        wsBus.broadcast({ type: 'pet_state_update', state: newState });
-        break;
-      }
       case 'request_token_stats': {
         const stats = tokenStatsStore.getStats(message.range);
         wsBus.broadcast({ type: 'token_stats_update', stats });
@@ -383,10 +358,8 @@ export function createServer(
 
     async stop(): Promise<void> {
       clearInterval(staleCleanup);
-      clearInterval(petBroadcast);
       sessionStreamManager.shutdown();
       pendingStore.releaseAll();
-      petStateStore.flush();
       tokenStatsStore.flush();
       tailerStateStore.flush();
       await wsBus.close();

@@ -169,7 +169,6 @@ export interface GatewayConnected {
   pendingInteractions: PendingInteraction[];
   takeoverOwner?: string;
   transcriptEntries?: { sessionId: string; seq: number; entry: TranscriptEntry }[];
-  petState?: PetStatePayload;
   tokenStats?: TokenStatsPayload;
 }
 
@@ -180,7 +179,6 @@ export type GatewayMessage =
   | { type: 'event'; sessionId: string; seq: number; event: SSEHookEvent }
   | { type: 'transcript_entry'; sessionId: string; seq: number; entry: TranscriptEntry }
   | { type: 'mode_changed'; mode: GatewayMode; takeoverOwner?: string }
-  | { type: 'pet_state_update'; state: PetStatePayload }
   | { type: 'token_stats_update'; stats: TokenStatsPayload };
 
 // ── WebSocket protocol: Frontend -> Gateway ──
@@ -197,29 +195,11 @@ export type ClientMessage =
   | { type: 'register_push'; deviceToken: string; environment?: APNEnvironment }
   | { type: 'subscribe_session'; sessionId: string; fromSeq: number }
   | { type: 'disconnect' }
-  | { type: 'readopt' }
   | { type: 'request_token_stats'; range: 'today' | 'week' | 'month' };
 
 export type DevicePlatform = 'ios' | 'android' | 'web' | 'desktop';
 
 export type APNEnvironment = 'sandbox' | 'production';
-
-// ── Pet system types ──
-
-export type PetStage = 'egg' | 'baby' | 'adult';
-export type PetHealth = 'healthy' | 'sick' | 'critical' | 'dead';
-
-export interface PetStatePayload {
-  totalTokens: number;
-  satiety: number;
-  hearts: number;
-  stage: PetStage;
-  health: PetHealth;
-  lastFedAt: string | null;
-  isOverwork: boolean;
-  overworkStartedAt: string | null;
-  feedWindowStart?: string | null;
-}
 
 export interface TokenBreakdown {
   input: number;

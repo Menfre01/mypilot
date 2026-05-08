@@ -5,6 +5,7 @@ import { homedir, platform } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { createConnection } from "node:net";
 import { get } from "node:http";
 import { createServer } from "./gateway/server.js";
@@ -227,9 +228,7 @@ async function startGateway(pidDir: string, pidPath: string): Promise<void> {
 }
 
 function resolveSelfScriptPath(): string {
-  const url = import.meta.url;
-  const filePath = url.startsWith("file://") ? decodeURIComponent(new URL(url).pathname) : url;
-  return filePath;
+  return fileURLToPath(import.meta.url);
 }
 
 async function startBackground(pidDir: string, pidPath: string): Promise<void> {
