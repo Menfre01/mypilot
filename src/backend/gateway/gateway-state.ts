@@ -10,13 +10,28 @@ export interface PersistedDevice {
   locale?: string;
 }
 
+const MAX_RECENT_CWDS = 5;
+
 export interface GatewayState {
   mode: GatewayMode;
   takeoverOwner: string | null;
   devices: PersistedDevice[];
+  recentCwds?: string[];
 }
 
 const GATEWAY_STATE_FILE = 'gateway-state.json';
+
+export function recordRecentCwd(pidDir: string, cwd: string): void {
+  const state = loadGatewayState(pidDir);
+  const recentCwds = (state?.recentCwds ?? []).filter(d => d !== cwd);
+  recentCwds.unshift(cwd);
+  saveGatewayState(pidDir, {
+    mode: state?.mode ?? 'bystander',
+    takeoverOwner: state?.takeoverOwner ?? null,
+    devices: state?.devices ?? [],
+    recentCwds: recentCwds.slice(0, MAX_RECENT_CWDS),
+  });
+}
 
 export function loadGatewayState(pidDir: string): GatewayState | null {
   try {
@@ -31,6 +46,10 @@ export function loadGatewayState(pidDir: string): GatewayState | null {
 }
 
 export function saveGatewayState(pidDir: string, state: GatewayState): void {
-  writeFileSync(join(pidDir, GATEWAY_STATE_FILE), JSON.stringify(state, null, 2), 'utf-8');
+  try {
+    writeFileSync(join(pidDir, GATEWAY_STATE_FILE), JSON.stringify(state, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[GatewayState] Failed to save state: %s', err instanceof Error ? err.message : err);
+  }
 }
 

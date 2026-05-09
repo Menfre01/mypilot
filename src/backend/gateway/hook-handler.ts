@@ -3,7 +3,9 @@ import { PendingStore } from './pending-store.js';
 import { DeviceStore } from './device-store.js';
 import { WsBus } from './ws-bus.js';
 import { EventLogger } from './event-logger.js';
+import type { ClaudeProcessManager } from './claude-process-manager.js';
 import { PushService } from './push-service.js';
+import { recordRecentCwd } from './gateway-state.js';
 import {
   isUserInteractionEvent,
   isInteractivePreToolUse,
@@ -15,6 +17,7 @@ import type {
   GatewayMessage,
   HookEventName,
   SessionEvent,
+  SessionSource,
 } from '../../shared/protocol.js';
 import type { SessionStreamManager } from './session-stream-manager.js';
 import type { SessionMessage } from '../../shared/protocol.js';
@@ -43,11 +46,13 @@ export class HookHandler {
   private takeoverOwner: string | null;
   private eventLogger: EventLogger | null;
   private streamManager: SessionStreamManager | null = null;
+  private processManager: ClaudeProcessManager | null = null;
   private eventHistory: SessionEvent[] = [];
   private historyHead = 0;
   private maxHistory = 200;
   private historyCache: SessionEvent[] | null = null;
   private onStateChange?: () => void;
+  private pidDir: string;
 
   // Serialize handleEvent calls so seq assignment is strictly ordered across
   // concurrent HTTP requests.
@@ -63,6 +68,7 @@ export class HookHandler {
     pendingStore: PendingStore,
     deviceStore: DeviceStore,
     wsBus: WsBus,
+    pidDir: string,
     eventLogger?: EventLogger,
     pushService?: PushService,
     initialState?: { mode: GatewayMode; takeoverOwner: string | null },
@@ -72,6 +78,7 @@ export class HookHandler {
     this.pendingStore = pendingStore;
     this.deviceStore = deviceStore;
     this.wsBus = wsBus;
+    this.pidDir = pidDir;
     this.eventLogger = eventLogger ?? null;
     this.pushService = pushService ?? null;
     this.mode = initialState?.mode ?? 'bystander';
@@ -116,7 +123,7 @@ export class HookHandler {
 
       const eventName = event.hook_event_name;
 
-      this._registerAndBroadcastNewSession(sessionId);
+      this._registerAndBroadcastNewSession(sessionId, event.cwd as string | undefined);
       this.sessionStore.touch(sessionId);
 
       const seq = this.streamManager?.nextSeqFn() ?? 0;
@@ -195,11 +202,40 @@ export class HookHandler {
     return {};
   }
 
-  private _registerAndBroadcastNewSession(sessionId: string): void {
+  private _registerAndBroadcastNewSession(sessionId: string, cwd?: string): void {
     const isNew = !this.sessionStore.has(sessionId);
     const info = this.sessionStore.register(sessionId);
+    // hook 事件可能不包含 cwd，从 ProcessManager 中取
+    const resolvedCwd = cwd ?? this.processManager?.getStatus(sessionId)?.cwd;
     if (isNew) {
-      this.broadcastAll({ type: 'session_start', session: info });
+      // 对账 session：将 ProcessManager 中的初始 UUID 映射到 Claude 真实 session ID
+      let reconciledSource: SessionSource | undefined;
+      if (this.processManager && resolvedCwd) {
+        const pending = this.processManager.reconcilePtySession(resolvedCwd);
+        if (pending) {
+          reconciledSource = pending.source;
+          this.processManager.updateSessionId(pending.id, sessionId);
+          this.sessionStore.updateId(pending.id, sessionId);
+
+          // 同步 displayName（PTY session 创建时指定的名称存储在 ProcessManager 中）
+          const status = this.processManager.getStatus(sessionId);
+          if (status?.displayName) {
+            this.sessionStore.setDisplayName(sessionId, status.displayName);
+          }
+        }
+      }
+
+      // 设置来源：对账到的 source 优先，其次从 SessionStore 已有信息推断（updateId 合并后），
+      // 兜底为 'desktop'（CLI 创建的 session 源）
+      const current = this.sessionStore.get(sessionId);
+      if (current && !current.source) {
+        this.sessionStore.setSource(sessionId, reconciledSource ?? 'desktop');
+      }
+
+      if (resolvedCwd) recordRecentCwd(this.pidDir, resolvedCwd);
+
+      const updated = this.sessionStore.get(sessionId);
+      this.broadcastAll({ type: 'session_start', session: updated ?? info });
     }
   }
 
@@ -231,11 +267,13 @@ export class HookHandler {
   }
 
   deleteSession(sessionId: string): void {
+    if (!this.sessionStore.has(sessionId)) return;
     this.cancelPushesForSession(sessionId);
     this.broadcastAll({ type: 'session_end', sessionId });
     this.sessionStore.unregister(sessionId);
     this.pendingStore.releaseSession(sessionId);
     this.streamManager?.stopSession(sessionId);
+    this.processManager?.kill(sessionId);
   }
 
   setMode(mode: GatewayMode, deviceId?: string): void {
@@ -258,6 +296,10 @@ export class HookHandler {
 
   setStreamManager(sm: SessionStreamManager): void {
     this.streamManager = sm;
+  }
+
+  setProcessManager(pm: ClaudeProcessManager): void {
+    this.processManager = pm;
   }
 
   getTakeoverOwner(): string | null {

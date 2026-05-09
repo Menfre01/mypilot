@@ -75,12 +75,17 @@ export type HookEventName =
 
 // ── Session info ──
 
+export type SessionMode = 'pty' | 'headless';
+
+export type SessionSource = 'desktop' | 'mobile' | 'detached';
+
 export interface SessionInfo {
   id: string;
   color: string;
   colorIndex: number;
   startedAt: number;
   displayName?: string;
+  source?: SessionSource;
 }
 
 // ── Token usage ──
@@ -172,14 +177,25 @@ export interface GatewayConnected {
   tokenStats?: TokenStatsPayload;
 }
 
+export interface DirectoryItem {
+  path: string;
+  label: string;
+  /** 是否为建议目录（同级 git 项目），用于区分 UI 展示 */
+  source: 'recent' | 'suggestion' | 'current';
+}
+
 export type GatewayMessage =
   | GatewayConnected
   | { type: 'session_start'; session: SessionInfo }
   | { type: 'session_end'; sessionId: string }
+  | { type: 'session_error'; sessionId: string; message: string }
   | { type: 'event'; sessionId: string; seq: number; event: SSEHookEvent }
   | { type: 'transcript_entry'; sessionId: string; seq: number; entry: TranscriptEntry }
   | { type: 'mode_changed'; mode: GatewayMode; takeoverOwner?: string }
-  | { type: 'token_stats_update'; stats: TokenStatsPayload };
+  | { type: 'session_status_changed'; sessionId: string; source: SessionSource }
+  | { type: 'token_stats_update'; stats: TokenStatsPayload }
+  | { type: 'directories_list'; items: DirectoryItem[] }
+  | { type: 'validate_path_result'; path: string; ok: boolean; error?: string };
 
 // ── WebSocket protocol: Frontend -> Gateway ──
 
@@ -189,13 +205,19 @@ export type ClientMessage =
   | { type: 'takeover' }
   | { type: 'release' }
   | { type: 'interact'; sessionId: string; eventId: string; response: InteractionResponse }
+  | { type: 'start_session'; cwd?: string; model?: string; displayName?: string }
+  | { type: 'send_prompt'; sessionId: string; prompt: string }
+  | { type: 'stop_session'; sessionId: string }
+  | { type: 'interrupt_session'; sessionId: string }
   | { type: 'request_sessions'; lastEventSeq?: number }
   | { type: 'delete_session'; sessionId: string }
   | { type: 'register_device'; platform: DevicePlatform; locale?: string }
   | { type: 'register_push'; deviceToken: string; environment?: APNEnvironment }
   | { type: 'subscribe_session'; sessionId: string; fromSeq: number }
   | { type: 'disconnect' }
-  | { type: 'request_token_stats'; range: 'today' | 'week' | 'month' };
+  | { type: 'request_token_stats'; range: 'today' | 'week' | 'month' }
+  | { type: 'request_directories' }
+  | { type: 'validate_path'; path: string };
 
 export type DevicePlatform = 'ios' | 'android' | 'web' | 'desktop';
 
@@ -212,3 +234,20 @@ export interface TokenStatsPayload {
   records: Record<string, Record<string, Record<string, TokenBreakdown>>>;
   lastUpdated: string;
 }
+
+// ── PTY Relay protocol (internal, CLI ↔ WS relay) ──
+
+export interface PtyRelayClientMessage {
+  type: 'pty_in' | 'pty_detach' | 'pty_resize';
+  sessionId?: string;
+  data?: string;
+  cols?: number;
+  rows?: number;
+}
+
+export type PtyRelayServerMessage =
+  | { type: 'pty_out'; data: string }
+  | { type: 'pty_ready'; sessionId: string }
+  | { type: 'session_detached'; sessionId: string }
+  | { type: 'session_end'; sessionId: string }
+  | { type: 'pty_error'; message: string };

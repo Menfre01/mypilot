@@ -92,7 +92,11 @@ export class TokenStatsStore {
   private _persist(): void {
     this.dirty = false;
     this.state.lastUpdated = new Date().toISOString();
-    writeFileSync(this.filePath, JSON.stringify(this.state, null, 2), 'utf-8');
+    try {
+      writeFileSync(this.filePath, JSON.stringify(this.state, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('[TokenStatsStore] Failed to persist state: %s', err instanceof Error ? err.message : err);
+    }
   }
 
   flush(): void {

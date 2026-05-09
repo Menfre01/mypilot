@@ -1,4 +1,4 @@
-import type { SessionInfo } from '../../shared/protocol.js';
+import type { SessionInfo, SessionSource } from '../../shared/protocol.js';
 
 export const SESSION_COLORS = [
   "#89b4fa",
@@ -46,17 +46,6 @@ export class SessionStore {
     this.hiddenIds.delete(sessionId);
   }
 
-  getStaleIds(thresholdMs: number): string[] {
-    const now = Date.now();
-    const stale: string[] = [];
-    for (const [id, lastSeen] of this.lastActivityAt) {
-      if (now - lastSeen > thresholdMs) {
-        stale.push(id);
-      }
-    }
-    return stale;
-  }
-
   get(sessionId: string): SessionInfo | undefined {
     return this.sessions.get(sessionId);
   }
@@ -79,5 +68,42 @@ export class SessionStore {
 
   has(sessionId: string): boolean {
     return this.sessions.has(sessionId);
+  }
+
+  setDisplayName(sessionId: string, name: string): void {
+    const info = this.sessions.get(sessionId);
+    if (info) {
+      this.sessions.set(sessionId, { ...info, displayName: name });
+    }
+  }
+
+  setSource(sessionId: string, source: SessionSource): void {
+    const info = this.sessions.get(sessionId);
+    if (info) {
+      this.sessions.set(sessionId, { ...info, source });
+    }
+  }
+
+  /** 将 session 信息从 oldId 迁移到 newId，保留所有元数据。
+   *  当 newId 已存在时（hook 事件先于 stream-json 对账到达），
+   *  合并两者信息，以 oldId 的元数据为主。 */
+  updateId(oldId: string, newId: string): boolean {
+    const info = this.sessions.get(oldId);
+    if (!info) return false;
+    this.sessions.delete(oldId);
+    this.sessions.set(newId, { ...this.sessions.get(newId), ...info, id: newId });
+
+    const lastSeen = this.lastActivityAt.get(oldId);
+    if (lastSeen !== undefined) {
+      this.lastActivityAt.delete(oldId);
+      this.lastActivityAt.set(newId, lastSeen);
+    }
+
+    if (this.hiddenIds.has(oldId)) {
+      this.hiddenIds.delete(oldId);
+      this.hiddenIds.add(newId);
+    }
+
+    return true;
   }
 }

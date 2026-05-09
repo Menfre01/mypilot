@@ -39,6 +39,7 @@ describe('HookHandler', () => {
   let wsBus: WsBus;
   let handler: HookHandler;
   let logDir: string;
+  let pidDir: string;
   let eventLogger: EventLogger;
   let streamManager: SessionStreamManager;
 
@@ -48,11 +49,12 @@ describe('HookHandler', () => {
     deviceStore = new DeviceStore();
     wsBus = new WsBus(randomBytes(32));
     logDir = mkdtempSync(join(tmpdir(), 'mypilot-hh-log-'));
+    pidDir = mkdtempSync(join(tmpdir(), 'mypilot-hh-pid-'));
     eventLogger = new EventLogger(logDir);
     streamManager = new SessionStreamManager(eventLogger, wsBus, {
       pipelineCapacity: 20,
     });
-    handler = new HookHandler(sessionStore, pendingStore, deviceStore, wsBus);
+    handler = new HookHandler(sessionStore, pendingStore, deviceStore, wsBus, pidDir);
     handler.setStreamManager(streamManager);
   });
 
@@ -141,20 +143,9 @@ describe('HookHandler', () => {
       expect(result).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
     });
 
-    it('Stop blocks and waits for response', async () => {
-      const promise = handler.handleEvent(makeEvent('Stop', 's1'));
-
-      await Promise.resolve();
-
-      const msgs = streamManager.pull(10);
-      const taggedMsg = msgs.find(m => m.source === 'hook');
-      expect(taggedMsg).toBeDefined();
-
-      const eventId = taggedMsg!.event!.event_id as string;
-      pendingStore.resolve('s1', eventId, { decision: 'block', reason: 'keep going' });
-
-      const result = await promise;
-      expect(result).toEqual({ decision: 'block', reason: 'keep going' });
+    it('Stop returns immediately (no longer blocks after downgrade)', async () => {
+      const result = await handler.handleEvent(makeEvent('Stop', 's1'));
+      expect(result).toEqual({});
     });
 
     it('Elicitation blocks and waits for response', async () => {
@@ -738,7 +729,7 @@ describe('HookHandler', () => {
       const pushService = new PushService('https://push.example.com', 'test-key', 'gw-1');
       const pushSpy = vi.spyOn(pushService, 'sendPush').mockResolvedValue({ ok: true });
       const handlerWithPush = new HookHandler(
-        sessionStore, pendingStore, deviceStore, wsBus, eventLogger, pushService,
+        sessionStore, pendingStore, deviceStore, wsBus, pidDir, eventLogger, pushService,
       );
       handlerWithPush.setStreamManager(streamManager);
 
@@ -780,7 +771,7 @@ describe('HookHandler', () => {
         new Promise(() => {}),
       );
       const handlerWithPush = new HookHandler(
-        sessionStore, pendingStore, deviceStore, wsBus, eventLogger, pushService,
+        sessionStore, pendingStore, deviceStore, wsBus, pidDir, eventLogger, pushService,
       );
       handlerWithPush.setStreamManager(streamManager);
 
@@ -814,7 +805,7 @@ describe('HookHandler', () => {
         new Promise(() => {}),
       );
       const handlerWithPush = new HookHandler(
-        sessionStore, pendingStore, deviceStore, wsBus, eventLogger, pushService,
+        sessionStore, pendingStore, deviceStore, wsBus, pidDir, eventLogger, pushService,
       );
       handlerWithPush.setStreamManager(streamManager);
 

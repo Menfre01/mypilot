@@ -14,7 +14,8 @@ import { displayConnectionInfo } from "./gateway/qr-display.js";
 import { mergeHooksIntoSettings, buildHooksConfig } from "./gateway/hooks-config.js";
 import { loadLinksConfig, saveLinksConfig } from "./gateway/link-config.js";
 import { loadPushConfig, savePushConfig, deletePushConfig, generateGatewayId, autoRegisterPush, getUserInfo, DEFAULT_RELAY_URL } from "./gateway/push-config.js";
-import { VALID_LINK_TYPES, type LinkType } from "../shared/protocol.js";
+import { VALID_LINK_TYPES, type LinkType, type PtyRelayServerMessage } from "../shared/protocol.js";
+import { WebSocket } from "ws";
 
 export const PID_DIR = join(homedir(), ".mypilot");
 export const PID_PATH = join(PID_DIR, "gateway.pid");
@@ -135,6 +136,14 @@ function printUsage(): void {
   console.log("  status      Check Gateway status");
   console.log("  pair-info   Show pairing info (IP + QR code)");
   console.log("  init-hooks  Configure Claude Code hooks");
+  console.log("  session     Create or attach to a Claude Code session");
+  console.log("              session [--name <name>] [--cwd <path>] [--model <model>]");
+  console.log("              session --resume <name-or-id>");
+  console.log("              session --last");
+  console.log("              session --attach <name-or-id> [--force]");
+  console.log("              session --list");
+  console.log("              session --kill <name-or-id>");
+  console.log("              session --detach");
   console.log("  link        Manage communication links");
   console.log("              link list");
   console.log("              link add <lan|tunnel> <url> [--label <label>]");
@@ -623,6 +632,335 @@ async function handlePushCommand(pidDir: string, args: string[]): Promise<void> 
   process.exit(1);
 }
 
+async function handleSessionCommand(pidDir: string, args: string[]): Promise<void> {
+  const key = getOrCreateKeySafe(pidDir);
+  if (!key) {
+    console.error("Gateway has not been started yet. Run 'mypilot gateway' first.");
+    process.exit(1);
+  }
+
+  const isExisting = await checkExistingGateway(DEFAULT_PORT, key);
+  if (!isExisting) {
+    console.error(`Gateway is not running or not responding correctly on port ${DEFAULT_PORT}. Check gateway status.`);
+    process.exit(1);
+  }
+
+  type SessionAction = 'new' | 'resume' | 'attach' | 'list' | 'kill' | 'detach' | 'last';
+  let action: SessionAction = 'new';
+  let sessionTarget: string | undefined;
+  let sessionName: string | undefined;
+  let sessionCwd: string | undefined;
+  let sessionModel: string | undefined;
+  let forceAttach = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    switch (arg) {
+      case '--name':
+        sessionName = args[++i];
+        break;
+      case '--cwd':
+        sessionCwd = args[++i];
+        break;
+      case '--model':
+        sessionModel = args[++i];
+        break;
+      case '--resume':
+        action = 'resume';
+        sessionTarget = args[++i];
+        break;
+      case '--last':
+        action = 'last';
+        break;
+      case '--attach':
+        action = 'attach';
+        sessionTarget = args[++i];
+        break;
+      case '--list':
+        action = 'list';
+        break;
+      case '--kill':
+        action = 'kill';
+        sessionTarget = args[++i];
+        break;
+      case '--detach':
+        action = 'detach';
+        break;
+      case '--force':
+        forceAttach = true;
+        break;
+      default:
+        if (!arg.startsWith('--')) {
+          // Positional argument: treat as resume target
+          action = 'resume';
+          sessionTarget = arg;
+        }
+        break;
+    }
+  }
+
+  if (action === 'list') {
+    const sessions = await fetchSessionList(DEFAULT_PORT, key);
+    if (!sessions || sessions.length === 0) {
+      console.log("No active sessions.");
+      return;
+    }
+    console.log("ID                                    名称           模式       来源");
+    console.log("─".repeat(80));
+    for (const s of sessions) {
+      const id = s.sessionId.slice(0, 8);
+      const name = s.displayName ?? '-';
+      const mode = s.mode === 'pty' ? 'PTY' : 'headless';
+      const source = s.source ?? '-';
+      console.log(`${id.padEnd(12)} ${name.slice(0, 12).padEnd(12)} ${mode.padEnd(8)} ${source}`);
+    }
+    return;
+  }
+
+  if (action === 'kill') {
+    if (!sessionTarget) {
+      console.error("Usage: mypilot session --kill <name-or-id>");
+      process.exit(1);
+    }
+    const sessions = await fetchSessionList(DEFAULT_PORT, key);
+    if (!sessions || sessions.length === 0) {
+      console.error("Error: no active sessions.");
+      process.exit(1);
+    }
+    let fullId: string | null = null;
+    const prefixMatches: string[] = [];
+    for (const s of sessions) {
+      if (s.sessionId === sessionTarget) {
+        fullId = s.sessionId;
+        break;
+      }
+      if (s.sessionId.startsWith(sessionTarget)) {
+        prefixMatches.push(s.sessionId);
+      }
+      if (s.displayName === sessionTarget) {
+        fullId = s.sessionId;
+        break;
+      }
+    }
+    if (!fullId && prefixMatches.length === 1) {
+      fullId = prefixMatches[0];
+    }
+    if (!fullId) {
+      console.error("Error: session '%s' not found.", sessionTarget);
+      process.exit(1);
+    }
+    await sendKillCommand(DEFAULT_PORT, key, fullId);
+    console.log("Session %s killed.", sessionTarget);
+    return;
+  }
+
+  if (action === 'detach') {
+    console.log("Detach from current session. Use Ctrl+C to detach without killing the session.");
+    return;
+  }
+
+  const params = new URLSearchParams();
+  if (action === 'new') {
+    params.set('sessionId', 'new');
+  } else if (action === 'last') {
+    params.set('sessionId', 'last');
+  } else {
+    params.set('sessionId', sessionTarget ?? 'new');
+  }
+  if (sessionName) params.set('name', sessionName);
+  params.set('cwd', sessionCwd ?? process.cwd());
+  if (sessionModel) params.set('model', sessionModel);
+  if (forceAttach) params.set('force', '1');
+
+  const relayUrl = `ws://127.0.0.1:${DEFAULT_PORT}/pty-relay?${params.toString()}`;
+
+  await runPtyRelayClient(relayUrl);
+}
+
+interface SessionListEntry {
+  sessionId: string;
+  mode: string;
+  displayName?: string;
+  source?: string;
+}
+
+async function fetchSessionList(port: number, key: Buffer): Promise<SessionListEntry[] | null> {
+  return new Promise((resolve) => {
+    const req = get(
+      `http://localhost:${port}/sessions?key=${encodeURIComponent(key.toString('base64'))}`,
+      { timeout: 5000 },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve(null);
+          }
+        });
+      },
+    );
+    req.on("error", () => resolve(null));
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+  });
+}
+
+async function sendKillCommand(port: number, key: Buffer, sessionId: string): Promise<void> {
+  // Connect via encrypted WebSocket to send stop_session
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws-gateway?key=${encodeURIComponent(key.toString('base64'))}`);
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("Timeout sending kill command"));
+    }, 5000);
+
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ type: 'stop_session', sessionId }));
+      clearTimeout(timer);
+      ws.close();
+      resolve();
+    });
+
+    ws.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
+async function runPtyRelayClient(url: string): Promise<void> {
+  const { stdin, stdout, exit } = process;
+
+  if (!stdin.isTTY) {
+    console.error("Error: session command requires a TTY terminal.");
+    process.exit(1);
+  }
+
+  const ws = new WebSocket(url);
+  let wsReady = false;
+
+  function restoreTerminal(): void {
+    if (stdin.isTTY && stdin.isRaw) {
+      stdin.setRawMode(false);
+    }
+  }
+
+  let onResize: (() => void) | undefined;
+
+  function cleanup(): void {
+    restoreTerminal();
+    process.removeListener('SIGINT', onSigint);
+    process.removeListener('SIGTERM', onSigterm);
+    process.removeListener('exit', restoreTerminal);
+    if (onResize) process.removeListener('SIGWINCH', onResize);
+    if (stdin.isTTY) {
+      stdin.destroy();
+    }
+  }
+
+  function onSigint(): void {
+    if (wsReady && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ type: 'pty_detach' }));
+      } catch { /* ignore */ }
+    }
+    cleanup();
+    exit(0);
+  }
+
+  function onSigterm(): void {
+    cleanup();
+    exit(0);
+  }
+
+  process.on('exit', restoreTerminal);
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
+
+  return new Promise((resolve, reject) => {
+    ws.on('open', () => {
+      wsReady = true;
+
+      if (stdin.isTTY) {
+        stdin.setRawMode(true);
+      }
+      stdin.resume();
+      stdin.setEncoding('utf8');
+
+      stdin.on('data', (data: string) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ type: 'pty_in', data }));
+          } catch { /* ignore */ }
+        }
+      });
+
+      onResize = () => {
+        if (ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({
+              type: 'pty_resize',
+              cols: stdout.columns,
+              rows: stdout.rows,
+            }));
+          } catch { /* ignore */ }
+        }
+      };
+      process.on('SIGWINCH', onResize);
+      onResize();
+    });
+
+    ws.on('message', (raw) => {
+      let msg: PtyRelayServerMessage;
+      try {
+        msg = JSON.parse(raw.toString());
+      } catch {
+        return;
+      }
+
+      switch (msg.type) {
+        case 'pty_out':
+          if (msg.data) {
+            stdout.write(msg.data);
+          }
+          break;
+        case 'pty_ready':
+          console.log('Session ready: %s', msg.sessionId);
+          break;
+        case 'session_detached':
+          console.log('\nSession detached. Gateway continues running.');
+          cleanup();
+          ws.close();
+          exit(0);
+          break;
+        case 'session_end':
+          console.log('\nSession ended.');
+          cleanup();
+          ws.close();
+          exit(0);
+          break;
+        case 'pty_error':
+          console.error('Error: %s', msg.message ?? 'Unknown error');
+          cleanup();
+          ws.close();
+          exit(1);
+          break;
+      }
+    });
+
+    ws.on('close', () => {
+      cleanup();
+      exit(0);
+    });
+
+    ws.on('error', (err) => {
+      cleanup();
+      exit(1);
+    });
+  });
+}
+
 export async function runCli(
   argv: string[],
   pidDir: string = PID_DIR,
@@ -664,6 +1002,9 @@ export async function runCli(
       break;
     case "push":
       await handlePushCommand(pidDir, argv.slice(3));
+      break;
+    case "session":
+      await handleSessionCommand(pidDir, argv.slice(3));
       break;
     default:
       printUsage();

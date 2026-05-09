@@ -13,6 +13,12 @@ import { SessionStreamManager } from './session-stream-manager.js';
 import { TokenStatsStore, parseBrand } from './token-stats-store.js';
 import { TailerStateStore } from './tailer-state-store.js';
 import { getLocalDate } from '../../shared/date-utils.js';
+import { basename } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { accessSync, constants } from 'node:fs';
+import { ClaudeProcessManager } from './claude-process-manager.js';
+import { createPtyRelay, type PtyRelayServer } from './pty-relay.js';
+
 
 export type { PushConfigFile as PushConfig };
 
@@ -34,6 +40,8 @@ export function createServer(
   const pendingStore = new PendingStore();
   const deviceStore = new DeviceStore(savedState?.devices);
   const wsBus = new WsBus(key);
+  const processManager = new ClaudeProcessManager();
+  let ptyRelay: PtyRelayServer | undefined;
   const eventLogger = new EventLogger(logDir);
   const tokenStatsStore = new TokenStatsStore(pidDir);
   const tailerStateStore = new TailerStateStore(pidDir);
@@ -110,6 +118,7 @@ export function createServer(
     pendingStore,
     deviceStore,
     wsBus,
+    pidDir,
     eventLogger,
     pushService,
     savedState ? { mode: savedState.mode, takeoverOwner: savedState.takeoverOwner } : undefined,
@@ -122,6 +131,7 @@ export function createServer(
   });
   sessionStreamManager.recoverSeq(eventLogger);
   hookHandler.setStreamManager(sessionStreamManager);
+  hookHandler.setProcessManager(processManager);
 
   function drainPipeline(): void {
     const backlog = sessionStreamManager.pipelineSize;
@@ -150,9 +160,6 @@ export function createServer(
   }
 
   sessionStreamManager.onDrain(drainPipeline);
-
-  const SESSION_STALE_MS = 24 * 60 * 60_000;
-  const staleCleanup = setInterval(cleanupStaleSessions, 60_000);
 
   let httpServer: Server;
 
@@ -209,16 +216,24 @@ export function createServer(
       return;
     }
 
+    if (req.method === 'GET' && url.pathname === '/sessions') {
+      const sessionsKey = url.searchParams.get('key');
+      if (!sessionsKey || sessionsKey !== keyB64) {
+        sendJSON(res, 403, { error: 'Invalid key' });
+        return;
+      }
+      const sessions = processManager.getActiveSessions().map(s => ({
+        sessionId: s.sessionId,
+        mode: s.mode,
+        displayName: s.displayName,
+        source: sessionStore.get(s.sessionId)?.source ?? 'desktop',
+      }));
+      sendJSON(res, 200, sessions);
+      return;
+    }
+
     res.writeHead(404, CORS_HEADERS);
     res.end('Not Found');
-  }
-
-  function cleanupStaleSessions(): void {
-    const staleIds = sessionStore.getStaleIds(SESSION_STALE_MS);
-    for (const id of staleIds) {
-      console.log('[Session] cleaning up stale session %s (inactive > %d min)', id, SESSION_STALE_MS / 60_000);
-      hookHandler.deleteSession(id);
-    }
   }
 
   function broadcastSessionState(lastEventSeq?: number, targetDeviceId?: string, cachedEvents?: ReturnType<typeof getRecentEvents>): void {
@@ -297,6 +312,52 @@ export function createServer(
         broadcastSessionState(message.lastEventSeq, deviceId);
         break;
       }
+      case 'start_session': {
+        const initialId = randomUUID();
+        const displayName = message.displayName;
+        const sessionIdRef = processManager.createSessionIdRef(initialId);
+
+        // 手机端也使用 PTY 模式（而非 headless/--print），
+        // 因为 --print 是一次性模式，进程会立即退出。
+        // PTY 模式保持 Claude Code TUI 持续运行，与桌面行为一致。
+        processManager.spawnPTY(initialId, {
+          cwd: message.cwd,
+          model: message.model,
+          displayName,
+          source: 'mobile',
+        });
+
+        // cwd 由 HookHandler 在 SessionStart 对账时统一记录
+        broadcastSessionState(undefined, deviceId);
+        break;
+      }
+      case 'send_prompt': {
+        const mode = processManager.getMode(message.sessionId);
+        if (mode === 'headless') {
+          const userMsg = JSON.stringify({
+            type: 'user',
+            message: {
+              role: 'user',
+              content: [{ type: 'text', text: message.prompt }],
+            },
+          });
+          processManager.write(message.sessionId, userMsg + '\n');
+        } else {
+          // PTY raw 模式下 Enter 键是 \r，写 \n 只会换行不提交
+          // 分两次 write：先写 prompt 文本，再单独写 \r
+          // 长 prompt 一次写入时 \r 可能在 node-pty 分块写入间隙丢失，
+          // 导致终端不会自动回车，输入挂起直到下一个 prompt 到达
+          const promptText = message.prompt.replace(/\n$/, '');
+          if (promptText.length > 0) {
+            processManager.write(message.sessionId, promptText);
+          }
+          processManager.write(message.sessionId, '\r');
+        }
+        break;
+      }
+      case 'interrupt_session':
+        processManager.interrupt(message.sessionId);
+        break;
       case 'subscribe_session':
         void sessionStreamManager.replayHistory(
           message.sessionId, message.fromSeq, deviceId,
@@ -319,9 +380,35 @@ export function createServer(
         deviceStore.setConnected(deviceId, false);
         wsBus.disconnect(deviceId);
         break;
+      case 'stop_session':
+        processManager.kill(message.sessionId);
+        break;
       case 'request_token_stats': {
         const stats = tokenStatsStore.getStats(message.range);
         wsBus.broadcast({ type: 'token_stats_update', stats });
+        break;
+      }
+      case 'request_directories': {
+        const state = loadGatewayState(pidDir);
+        const recentCwds = state?.recentCwds ?? [];
+        const items = recentCwds.map(p => ({
+          path: p,
+          label: basename(p),
+          source: 'recent' as const,
+        }));
+        wsBus.broadcast({ type: 'directories_list', items }, deviceId);
+        break;
+      }
+      case 'validate_path': {
+        let ok = false;
+        let error: string | undefined;
+        try {
+          accessSync(message.path, constants.R_OK);
+          ok = true;
+        } catch {
+          error = '路径不存在或无访问权限';
+        }
+        wsBus.broadcast({ type: 'validate_path_result', path: message.path, ok, error }, deviceId);
         break;
       }
     }
@@ -332,7 +419,23 @@ export function createServer(
       httpServer = createHttpServer();
       httpServer.on('request', handleRequest);
 
+      ptyRelay = createPtyRelay(httpServer, processManager);
+      ptyRelay.start();
       wsBus.attach(httpServer);
+
+      // Centralized upgrade routing — prevents ws library path-conflict abort
+      httpServer.on('upgrade', (req, socket, head) => {
+        if (ptyRelay!.handleUpgrade(req, socket, head)) return;
+        wsBus.handleUpgrade(req, socket, head);
+      });
+
+      // ProcessManager → SessionStore 同步：进程退出/被杀时同步清理
+      processManager.on('session_ended', (sessionId: string) => {
+        if (sessionStore.has(sessionId)) {
+          hookHandler.deleteSession(sessionId);
+        }
+      });
+
       wsBus.onMessage(handleClientMessage);
       wsBus.onConnect((url, deviceId) => {
         deviceStore.setConnected(deviceId, true);
@@ -357,11 +460,12 @@ export function createServer(
     },
 
     async stop(): Promise<void> {
-      clearInterval(staleCleanup);
       sessionStreamManager.shutdown();
       pendingStore.releaseAll();
       tokenStatsStore.flush();
       tailerStateStore.flush();
+      if (ptyRelay) await ptyRelay.stop();
+      processManager.shutdown();
       await wsBus.close();
       return new Promise((resolve) => {
         if (httpServer) {

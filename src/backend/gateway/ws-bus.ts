@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server, IncomingMessage } from 'node:http';
+import type { Duplex } from 'node:stream';
 import type { GatewayConnected, GatewayMessage, ClientMessage, EncryptedEnvelope } from '../../shared/protocol.js';
 import { encrypt, decrypt } from './crypto.js';
 
@@ -28,17 +29,11 @@ export class WsBus {
     this.key = key;
   }
 
+  private keyB64 = '';
+
   attach(httpServer: Server): void {
-    const keyB64 = this.key.toString('base64');
-    this.wss = new WebSocketServer({
-      server: httpServer,
-      path: '/ws-gateway',
-      verifyClient: (info: { req: IncomingMessage }, callback: (res: boolean) => void) => {
-        const url = new URL(info.req.url ?? '/', `http://localhost`);
-        const clientKey = url.searchParams.get('key');
-        callback(clientKey === keyB64);
-      },
-    });
+    this.keyB64 = this.key.toString('base64');
+    this.wss = new WebSocketServer({ noServer: true });
 
     this.wss.on('connection', (ws, req) => {
       const connUrl = new URL(req.url ?? '/', `http://localhost`);
@@ -123,6 +118,25 @@ export class WsBus {
       this.perClientOfflineQueue.clear();
     }
     this.broadcast(msg, targetDeviceId);
+  }
+
+  /** Handle upgrade request manually. Returns true if handled, false if path doesn't match. */
+  handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): boolean {
+    const url = new URL(req.url ?? '/', `http://localhost`);
+    if (url.pathname !== '/ws-gateway') return false;
+
+    const clientKey = url.searchParams.get('key');
+    if (clientKey !== this.keyB64) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return true;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.wss!.handleUpgrade(req, socket as any, head, (ws) => {
+      this.wss!.emit('connection', ws, req);
+    });
+    return true;
   }
 
   onMessage(handler: MessageHandler): void {

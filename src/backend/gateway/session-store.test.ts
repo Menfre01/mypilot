@@ -98,24 +98,6 @@ describe("SessionStore", () => {
     expect(() => store.touch("no-such-session")).not.toThrow();
   });
 
-  it("getStaleIds returns sessions inactive beyond threshold", () => {
-    vi.useFakeTimers();
-    const store = new SessionStore();
-    const storeAny = store as unknown as { lastActivityAt: Map<string, number> };
-
-    store.register("fresh");
-    store.register("stale-1");
-    store.register("stale-2");
-
-    storeAny.lastActivityAt.set("stale-1", Date.now() - 31 * 60_000);
-    storeAny.lastActivityAt.set("stale-2", Date.now() - 60 * 60_000);
-
-    const stale = store.getStaleIds(30 * 60_000);
-    expect(stale.sort()).toEqual(["stale-1", "stale-2"]);
-
-    vi.useRealTimers();
-  });
-
   it("unregister cleans up lastActivityAt", () => {
     const store = new SessionStore();
     const storeAny = store as unknown as { lastActivityAt: Map<string, number> };

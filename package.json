@@ -21,12 +21,14 @@
     "docker:build": "docker compose build",
     "docker:up": "LAN_IP=${LAN_IP:-$(node -e \"const{networkInterfaces}=require('os');for(const[,a]of Object.entries(networkInterfaces()))for(const b of a)if(b.family==='IPv4'&&!b.internal&&b.address.startsWith('192.168.')){process.stdout.write(b.address);process.exit()}\")} docker compose up -d",
     "docker:down": "docker compose down",
-    "docker:restart": "npm run docker:down && npm run docker:build && npm run docker:up"
+    "docker:restart": "npm run docker:down && npm run docker:build && npm run docker:up",
+    "postinstall": "cd node_modules/node-pty && npx node-gyp rebuild"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "node-pty": "^1.0.0",
     "qrcode-terminal": "^0.12.0",
     "ws": "^8.18.0"
   },
@@ -34,6 +36,7 @@
     "@types/node": "^22.0.0",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.0",
+    "node-gyp": "^12.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0"

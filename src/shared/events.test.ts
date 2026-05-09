@@ -9,7 +9,6 @@ import { SESSION_COLORS } from '../backend/gateway/session-store.js';
 describe('Hook event classification', () => {
   const userInteractionEvents: HookEventName[] = [
     'PermissionRequest',
-    'Stop',
     'Elicitation',
   ];
 
@@ -24,7 +23,7 @@ describe('Hook event classification', () => {
       const others: HookEventName[] = [
         'PostToolUse', 'PostToolUseFailure', 'PreToolUse',
         'SessionStart', 'UserPromptSubmit', 'SessionEnd',
-        'Notification', 'SubagentStart', 'SubagentStop',
+        'Notification', 'SubagentStart', 'SubagentStop', 'Stop',
       ];
       for (const name of others) {
         expect(isUserInteractionEvent(name), `${name} should not be user interaction`).toBe(false);

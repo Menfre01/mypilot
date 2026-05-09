@@ -92,10 +92,10 @@ export class TranscriptTailer {
           source: 'transcript',
           entry,
         };
-        this.onPush(msg);
-      }
-      this.lastKnownSize = result.fileSize;
-      this.lastReadIndex = result.entries.length > 0
+        try { this.onPush(msg); } catch (err) { console.error('[TranscriptTailer] onPush error: %s', err instanceof Error ? err.message : err); }
+        }
+        this.lastKnownSize = result.fileSize;
+        this.lastReadIndex = result.entries.length > 0
         ? result.entries[result.entries.length - 1].index + 1
         : 0;
       this.stateStore?.setLastKnownSize(this.transcriptPath, this.lastKnownSize);
@@ -214,7 +214,7 @@ export class TranscriptTailer {
             },
           };
 
-          this.onPush(msg);
+          try { this.onPush(msg); } catch (err) { console.error('[TranscriptTailer] onPush error: %s', err instanceof Error ? err.message : err); }
           this.lastReadIndex = entryIndex + 1;
         }
       } finally {
@@ -268,7 +268,7 @@ export class TranscriptTailer {
                 blocks: parsed.blocks,
               },
             };
-            this.onPush(msg);
+            try { this.onPush(msg); } catch (err) { console.error('[TranscriptTailer] onPush error: %s', err instanceof Error ? err.message : err); }
             this.lastReadIndex = entryIndex + 1;
           }
           this.lastKnownSize = currentSize;
@@ -301,7 +301,7 @@ export class TranscriptTailer {
               blocks: parsed.blocks,
             },
           };
-          this.onPush(msg);
+          try { this.onPush(msg); } catch (err) { console.error('[TranscriptTailer] onPush error: %s', err instanceof Error ? err.message : err); }
         }
       } catch {
         // 真正不完整的行，丢弃

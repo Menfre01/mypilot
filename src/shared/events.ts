@@ -2,7 +2,6 @@
 
 const USER_INTERACTION_EVENTS: ReadonlySet<string> = new Set([
   'PermissionRequest',
-  'Stop',
   'Elicitation',
 ]);
 
