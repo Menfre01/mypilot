@@ -51,6 +51,8 @@ interface ProcessRecord {
   spawnOptions: SpawnOptions;
   /** 最近一次 write 的内容（去除 \n），用于过滤 PTY echo */
   lastWrite?: string;
+  /** 原始输出处理器（用于 TUI 拦截等场景） */
+  rawOutputHandlers: Set<(data: string) => void>;
 }
 
 export class ClaudeProcessManager extends EventEmitter {
@@ -210,6 +212,7 @@ export class ClaudeProcessManager extends EventEmitter {
       pty,
       relayClients: new Set(),
       messageHandlers: new Set(),
+      rawOutputHandlers: new Set(),
       spawnOptions: options,
     };
 
@@ -220,6 +223,9 @@ export class ClaudeProcessManager extends EventEmitter {
           try { client.send(data); } catch { /* ignore */ }
         }
         this.tryParseStreamJson(data, record.messageHandlers);
+        for (const handler of record.rawOutputHandlers) {
+          try { handler(data); } catch { /* ignore */ }
+        }
       } catch {
       }
     });
@@ -276,6 +282,7 @@ export class ClaudeProcessManager extends EventEmitter {
       pty,
       relayClients: new Set(),
       messageHandlers: new Set(),
+      rawOutputHandlers: new Set(),
       spawnOptions: options,
     };
 
@@ -365,6 +372,16 @@ export class ClaudeProcessManager extends EventEmitter {
     }
   }
 
+  /** 注册一个原始输出处理器，返回取消注册函数。用于 TUI 拦截等场景。 */
+  onRawOutput(sessionId: string, handler: (data: string) => void): () => void {
+    const record = this.processes.get(sessionId);
+    if (!record) return () => {};
+    record.rawOutputHandlers.add(handler);
+    return () => {
+      record.rawOutputHandlers.delete(handler);
+    };
+  }
+
   attachRelay(sessionId: string, client: PtyRelayClient): boolean {
     const record = this.processes.get(sessionId);
     if (!record) return false;
@@ -416,6 +433,7 @@ export class ClaudeProcessManager extends EventEmitter {
       const cleanup = () => {
         record.messageHandlers.clear();
         record.relayClients.clear();
+        record.rawOutputHandlers.clear();
         this.removeRecord(sessionId);
         this.emit('session_ended', sessionId);
         resolve();

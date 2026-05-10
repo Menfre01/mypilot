@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { accessSync, constants } from 'node:fs';
 import { ClaudeProcessManager } from './claude-process-manager.js';
 import { createPtyRelay, type PtyRelayServer } from './pty-relay.js';
+import { getAllCommands } from './commands.js';
 
 
 export type { PushConfigFile as PushConfig };
@@ -260,6 +261,7 @@ export function createServer(
       takeoverOwner: hookHandler.getTakeoverOwner() ?? undefined,
       transcriptEntries: transcriptEntries.length > 0 ? transcriptEntries : undefined,
       tokenStats: tokenStatsStore.getStats('today'),
+      commands: getAllCommands(),
     };
     wsBus.sendSessionList(msg, targetDeviceId);
   }
@@ -349,6 +351,7 @@ export function createServer(
         } else {
           // PTY raw 模式下 Enter 键是 \r，写 \n 只会换行不提交
           const promptText = message.prompt.replace(/\n$/, '');
+
           // 斜杠命令（/new、/simplify 等）需要在命令模式下执行，
           // \x03 (Ctrl+C) 确保 Claude Code 回到顶层提示符而非聊天输入区
           if (interruptedSessions.has(message.sessionId)) {

@@ -175,6 +175,7 @@ export interface GatewayConnected {
   takeoverOwner?: string;
   transcriptEntries?: { sessionId: string; seq: number; entry: TranscriptEntry }[];
   tokenStats?: TokenStatsPayload;
+  commands?: CommandItem[];
 }
 
 export interface DirectoryItem {
@@ -182,6 +183,20 @@ export interface DirectoryItem {
   label: string;
   /** 是否为建议目录（同级 git 项目），用于区分 UI 展示 */
   source: 'recent' | 'suggestion' | 'current';
+}
+
+// ── Clash command types ──
+
+export interface CommandItem {
+  name: string;          // e.g. '/rewind'
+  description: string;   // 中文描述
+  requiresArgs: boolean; // 是否需要参数（决定选中后是否自动发送）
+}
+
+export interface RewindTurn {
+  index: number;    // 0-based
+  role: string;     // 'User' | 'Assistant'
+  summary: string;  // 轮次摘要
 }
 
 export type GatewayMessage =
@@ -195,7 +210,8 @@ export type GatewayMessage =
   | { type: 'session_status_changed'; sessionId: string; source: SessionSource }
   | { type: 'token_stats_update'; stats: TokenStatsPayload }
   | { type: 'directories_list'; items: DirectoryItem[] }
-  | { type: 'validate_path_result'; path: string; ok: boolean; error?: string };
+  | { type: 'validate_path_result'; path: string; ok: boolean; error?: string }
+  | { type: 'rewind_selector'; interactionId: string; sessionId: string; turns: RewindTurn[] };
 
 // ── WebSocket protocol: Frontend -> Gateway ──
 
@@ -217,7 +233,9 @@ export type ClientMessage =
   | { type: 'disconnect' }
   | { type: 'request_token_stats'; range: 'today' | 'week' | 'month' }
   | { type: 'request_directories' }
-  | { type: 'validate_path'; path: string };
+  | { type: 'validate_path'; path: string }
+  | { type: 'rewind_select'; interactionId: string; sessionId: string; turnIndex: number }
+  | { type: 'rewind_cancel'; interactionId: string; sessionId: string };
 
 export type DevicePlatform = 'ios' | 'android' | 'web' | 'desktop';
 
