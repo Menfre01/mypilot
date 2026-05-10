@@ -14,9 +14,9 @@ import { displayConnectionInfo } from "./gateway/qr-display.js";
 import { mergeHooksIntoSettings, buildHooksConfig } from "./gateway/hooks-config.js";
 import { loadLinksConfig, saveLinksConfig } from "./gateway/link-config.js";
 import { loadPushConfig, savePushConfig, deletePushConfig, generateGatewayId, autoRegisterPush, getUserInfo, DEFAULT_RELAY_URL } from "./gateway/push-config.js";
-import { VALID_LINK_TYPES, type LinkType, type PtyRelayServerMessage } from "../shared/protocol.js";
+import { VALID_LINK_TYPES, type LinkType, type PtyRelayServerMessage, type CommandItem } from "../shared/protocol.js";
 import { WebSocket } from "ws";
-import { encrypt } from "./gateway/crypto.js";
+import { encrypt, decrypt } from "./gateway/crypto.js";
 
 export const PID_DIR = join(homedir(), ".mypilot");
 export const PID_PATH = join(PID_DIR, "gateway.pid");
@@ -140,6 +140,7 @@ function printUsage(): void {
   console.log("  status      Check Gateway status");
   console.log("  pair-info   Show pairing info (IP + QR code)");
   console.log("  init-hooks  Configure Claude Code hooks");
+  console.log("  refresh-skills  Re-scan skills and commands without restart");
   console.log("  session     Create or resume a Claude Code session");
   console.log("              session [--name <name>] [--cwd <path>] [--model <model>]");
   console.log("              session --resume <name-or-id>");
@@ -147,7 +148,7 @@ function printUsage(): void {
   console.log("              session kill <name-or-id>");
   console.log("              session ls [-w|--watch]");
   console.log("  link        Manage communication links");
-  console.log("              link list");
+  console.log("              link ls");
   console.log("              link add <lan|tunnel> <url> [--label <label>]");
   console.log("              link remove <id>");
   console.log("              link enable <id>");
@@ -486,7 +487,7 @@ function promptYesNo(question: string): Promise<boolean> {
 function handleLinkCommand(pidDir: string, args: string[]): void {
   const subCommand = args[0];
   const lanIP = detectLanIP();
-  if (!subCommand || subCommand === 'list') {
+  if (!subCommand || subCommand === 'list' || subCommand === 'ls') {
     const links = loadLinksConfig(pidDir, lanIP, DEFAULT_PORT);
     if (links.length === 0) {
       console.log('No links configured.');
@@ -1073,6 +1074,53 @@ async function runPtyRelayClient(url: string): Promise<void> {
   });
 }
 
+async function handleRefreshSkills(pidDir: string): Promise<void> {
+  const key = getOrCreateKey(pidDir);
+
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${DEFAULT_PORT}/ws-gateway?key=${encodeURIComponent(key.toString('base64'))}`,
+  );
+
+  const timeout = setTimeout(() => {
+    console.error('Connection timed out. Is the gateway running?');
+    ws.close();
+    process.exit(1);
+  }, 5000);
+
+  ws.on('open', () => {
+    ws.send(encrypt(key, JSON.stringify({ type: 'refresh_commands' })));
+  });
+
+  ws.on('message', (raw: Buffer) => {
+    let msg: Record<string, unknown>;
+    try {
+      const envelope = JSON.parse(raw.toString());
+      const plaintext = decrypt(key, { iv: envelope.iv as string, data: envelope.data as string });
+      msg = JSON.parse(plaintext);
+    } catch {
+      return;
+    }
+
+    if (msg.type === 'commands_list') {
+      clearTimeout(timeout);
+      const commands = msg.commands as CommandItem[];
+      console.log(`\nRefreshed (${commands.length} commands):\n`);
+      for (const cmd of commands) {
+        console.log(`  ${cmd.name.padEnd(22)} ${cmd.description}`);
+      }
+      console.log('');
+      ws.close();
+      process.exit(0);
+    }
+  });
+
+  ws.on('error', () => {
+    clearTimeout(timeout);
+    console.error('Failed to connect to gateway. Make sure it is running (mypilot start).');
+    process.exit(1);
+  });
+}
+
 export async function runCli(
   argv: string[],
   pidDir: string = PID_DIR,
@@ -1108,6 +1156,9 @@ export async function runCli(
       break;
     case "init-hooks":
       await initHooks(settingsPath);
+      break;
+    case "refresh-skills":
+      await handleRefreshSkills(pidDir);
       break;
     case "link":
       handleLinkCommand(pidDir, argv.slice(3));

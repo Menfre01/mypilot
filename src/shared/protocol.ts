@@ -86,6 +86,7 @@ export interface SessionInfo {
   startedAt: number;
   displayName?: string;
   source?: SessionSource;
+  cwd?: string;
 }
 
 // ── Token usage ──
@@ -211,7 +212,8 @@ export type GatewayMessage =
   | { type: 'token_stats_update'; stats: TokenStatsPayload }
   | { type: 'directories_list'; items: DirectoryItem[] }
   | { type: 'validate_path_result'; path: string; ok: boolean; error?: string }
-  | { type: 'rewind_selector'; interactionId: string; sessionId: string; turns: RewindTurn[] };
+  | { type: 'rewind_selector'; interactionId: string; sessionId: string; turns: RewindTurn[] }
+  | { type: 'commands_list'; commands: CommandItem[] };
 
 // ── WebSocket protocol: Frontend -> Gateway ──
 
@@ -235,7 +237,8 @@ export type ClientMessage =
   | { type: 'request_directories' }
   | { type: 'validate_path'; path: string }
   | { type: 'rewind_select'; interactionId: string; sessionId: string; turnIndex: number }
-  | { type: 'rewind_cancel'; interactionId: string; sessionId: string };
+  | { type: 'rewind_cancel'; interactionId: string; sessionId: string }
+  | { type: 'refresh_commands' };
 
 export type DevicePlatform = 'ios' | 'android' | 'web' | 'desktop';
 

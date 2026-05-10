@@ -10,6 +10,8 @@ export interface PushPayload {
   content?: string;
   locale?: string;
   environment?: APNEnvironment;
+  /** Session display name (用户设置的名称)，可能为空 */
+  sessionName?: string;
 }
 
 export interface SendResult {
@@ -82,6 +84,8 @@ export class PushService {
         event_id: payload.eventId,
         event_name: payload.eventName,
         tool_name: payload.toolName,
+        session_name: payload.sessionName,
+        session_short_id: payload.sessionId.slice(0, 8),
       },
     });
 
@@ -212,8 +216,9 @@ function categoryForEvent(eventName: HookEventName): string | null {
     case 'PermissionRequest':
       return APNS_CATEGORY.APPROVAL;
     case 'Stop':
+      return null; // 纯通知，无交互类型
     case 'SubagentStop':
-      return APNS_CATEGORY.STOP;
+      return null;
     default:
       return null;
   }
@@ -222,33 +227,38 @@ function categoryForEvent(eventName: HookEventName): string | null {
 function buildNotification(payload: PushPayload): { title: string; body: string } {
   const toolLabel = payload.toolName ?? 'tool';
   const { locale } = payload;
+  const sessionLabel = payload.sessionName ?? `#${payload.sessionId.slice(0, 8)}`;
 
   switch (payload.eventName) {
     case 'PermissionRequest': {
       let bodyText: string;
       if (payload.content) {
         const brief = truncateTail(payload.content, 100);
-        bodyText = `${toolLabel}: ${brief}`;
+        bodyText = `${sessionLabel}: ${toolLabel}: ${brief}`;
       } else {
-        bodyText = t('wantsToUse', locale, { tool: toolLabel });
+        bodyText = t('wantsToUse', locale, { session: sessionLabel, tool: toolLabel });
       }
       return { title: t('permissionRequest', locale), body: bodyText };
     }
     case 'Stop':
-    case 'SubagentStop':
-      return { title: t('stopRequest', locale), body: t('wantsToStop', locale) };
+    case 'SubagentStop': {
+      return {
+        title: t('stopRequest', locale),
+        body: t('wantsToStop', locale, { session: sessionLabel }),
+      };
+    }
     case 'Elicitation':
-      return { title: t('question', locale), body: t('hasAQuestion', locale) };
+      return { title: t('question', locale), body: t('hasAQuestion', locale, { session: sessionLabel }) };
     case 'PreToolUse':
       if (payload.toolName === 'AskUserQuestion') {
-        return { title: t('question', locale), body: t('hasAQuestion', locale) };
+        return { title: t('question', locale), body: t('hasAQuestion', locale, { session: sessionLabel }) };
       }
       if (payload.toolName === 'ExitPlanMode') {
-        return { title: t('planReview', locale), body: t('wantsToExitPlanMode', locale) };
+        return { title: t('planReview', locale), body: t('wantsToExitPlanMode', locale, { session: sessionLabel }) };
       }
-      return { title: t('approvalNeeded', locale), body: t('wantsToUse', locale, { tool: toolLabel }) };
+      return { title: t('approvalNeeded', locale), body: t('wantsToUse', locale, { session: sessionLabel, tool: toolLabel }) };
     default:
-      return { title: t('myPilot', locale), body: t('newInteractionEvent', locale) };
+      return { title: t('myPilot', locale), body: t('newInteractionEvent', locale, { session: sessionLabel }) };
   }
 }
 

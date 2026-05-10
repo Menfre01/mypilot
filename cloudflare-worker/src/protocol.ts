@@ -30,12 +30,18 @@ export const SESSION_COLORS = [
   '#b4befe', '#89dceb', '#fab387', '#cba6f7',
 ];
 
+export type SessionMode = 'pty' | 'headless';
+
+export type SessionSource = 'desktop' | 'mobile' | 'detached';
+
 export interface SessionInfo {
   id: string;
   color: string;
   colorIndex: number;
   startedAt: number;
   displayName?: string;
+  source?: SessionSource;
+  cwd?: string;
 }
 
 // ── Token usage ──
@@ -70,6 +76,36 @@ export interface TranscriptEntry {
   model?: string;
   usage?: TokenUsage;
   blocks: TranscriptBlock[];
+}
+
+// ── Directory item ──
+
+export interface DirectoryItem {
+  path: string;
+  label: string;
+  source: 'recent' | 'suggestion' | 'current';
+}
+
+// ── Command item ──
+
+export interface CommandItem {
+  name: string;
+  description: string;
+  requiresArgs: boolean;
+}
+
+// ── Token stats ──
+
+export interface TokenBreakdown {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+}
+
+export interface TokenStatsPayload {
+  records: Record<string, Record<string, Record<string, TokenBreakdown>>>;
+  lastUpdated: string;
 }
 
 // ── Hook event ──
@@ -114,7 +150,13 @@ export type GatewayMessage =
   | GatewaySessionEnd
   | GatewayEvent
   | GatewayTranscriptEntry
-  | GatewayModeChanged;
+  | GatewayModeChanged
+  | { type: 'session_error'; sessionId: string; message: string }
+  | { type: 'session_status_changed'; sessionId: string; source: SessionSource }
+  | { type: 'token_stats_update'; stats: TokenStatsPayload }
+  | { type: 'directories_list'; items: DirectoryItem[] }
+  | { type: 'validate_path_result'; path: string; ok: boolean; error?: string }
+  | { type: 'commands_list'; commands: CommandItem[] };
 
 export interface GatewayConnected {
   type: 'connected';
@@ -125,6 +167,8 @@ export interface GatewayConnected {
   pendingInteractions: PendingInteraction[];
   takeoverOwner?: string;
   transcriptEntries?: { sessionId: string; seq: number; entry: TranscriptEntry }[];
+  tokenStats?: TokenStatsPayload;
+  commands?: CommandItem[];
 }
 
 export interface GatewaySessionStart {
@@ -159,19 +203,29 @@ export interface GatewayModeChanged {
 
 // ── Client → Gateway messages ──
 
-export type PushEnvironment = 'sandbox' | 'production';
+export type APNEnvironment = 'sandbox' | 'production';
+/** @deprecated use APNEnvironment */
+export type PushEnvironment = APNEnvironment;
 export type DevicePlatform = 'ios' | 'android' | 'web' | 'desktop';
 
 export type ClientMessage =
   | { type: 'takeover' }
   | { type: 'release' }
   | { type: 'interact'; sessionId: string; eventId: string; response: Record<string, unknown> }
+  | { type: 'start_session'; cwd?: string; model?: string; displayName?: string }
+  | { type: 'send_prompt'; sessionId: string; prompt: string }
+  | { type: 'stop_session'; sessionId: string }
+  | { type: 'interrupt_session'; sessionId: string }
   | { type: 'request_sessions'; lastEventSeq?: number }
   | { type: 'delete_session'; sessionId: string }
   | { type: 'register_device'; platform: DevicePlatform; locale?: string }
-  | { type: 'register_push'; deviceToken: string; environment?: PushEnvironment }
-  | { type: 'subscribe_session'; sessionId: string; fromSeq?: number }
-  | { type: 'disconnect' };
+  | { type: 'register_push'; deviceToken: string; environment?: APNEnvironment }
+  | { type: 'subscribe_session'; sessionId: string; fromSeq: number }
+  | { type: 'disconnect' }
+  | { type: 'request_token_stats'; range: 'today' | 'week' | 'month' }
+  | { type: 'request_directories' }
+  | { type: 'validate_path'; path: string }
+  | { type: 'refresh_commands' };
 
 // ── Encrypted envelope ──
 

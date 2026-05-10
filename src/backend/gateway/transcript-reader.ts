@@ -195,6 +195,14 @@ function extractToolResultBlocks(content: Array<Record<string, unknown>>): Trans
   return blocks;
 }
 
+// ── Local command XML detection ──
+
+const LOCAL_COMMAND_TAGS = /^<\/?(?:command-name|command-message|command-args|local-command-caveat)[\s>]/m;
+
+function hasLocalCommandXml(content: string): boolean {
+  return LOCAL_COMMAND_TAGS.test(content);
+}
+
 // ── Entry classification ──
 
 export interface ParsedEntry {
@@ -212,13 +220,14 @@ export function classifyEntry(entry: JsonEntry): ParsedEntry | null {
 
   const msg = message as Record<string, unknown>;
   const content = getContentBlocks(msg);
-  if (!content.length) return null;
 
   const blocks: TranscriptBlock[] = [];
   let model: string | undefined;
   let usage: TokenUsage | undefined;
 
   if (type === 'assistant') {
+    if (!content.length) return null;
+
     model = extractModel(entry, msg);
     usage = extractUsage(msg);
 
@@ -241,6 +250,17 @@ export function classifyEntry(entry: JsonEntry): ParsedEntry | null {
     }
 
     blocks.push(...extractToolResultBlocks(content));
+
+    // message.content 可能是纯字符串（例如 <task-notification> XML），
+    // content blocks 来自数组格式，单独处理字符串 fallback。
+    // 过滤 local command XML（command-name、command-message 等），这些是
+    // Claude Code 执行斜杠命令时产生的内部消息，移动端不需要展示。
+    if (!blocks.length && typeof msg.content === 'string') {
+      const str = msg.content as string;
+      if (str.trim() && !hasLocalCommandXml(str)) {
+        blocks.push({ type: 'text', text: str.slice(0, TEXT_MAX_CHARS) });
+      }
+    }
   }
 
   if (!blocks.length) return null;

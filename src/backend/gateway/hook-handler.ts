@@ -158,13 +158,19 @@ export class HookHandler {
 
       // Send push notification before pipeline push — time-sensitive.
       const isInteractive = this.mode === 'takeover' && (isUserInteractionEvent(eventName) || isInteractivePreToolUse(eventName, hookEvent));
-      if (isInteractive) {
+      const isStopEvent = eventName === 'Stop';
+
+      if (isInteractive || (this.mode === 'takeover' && isStopEvent)) {
         this.trySendPush(sessionId, eventId, hookEvent);
+      }
+      if (isInteractive) {
         pendingRequest = { sessionId, eventId, event: hookEvent };
       }
 
-      // 交互式 PreToolUse 暂存以等待对应 transcript 条目先到达，保证问题文本在选项卡片之前显示
-      if (isInteractivePreToolUse(eventName, hookEvent)) {
+      // 交互式 PreToolUse 暂存以等待对应 transcript 条目先到达，保证问题文本在选项卡片之前显示。
+      // 仅在 takeover 模式下暂存：standby 模式下不等待用户交互，PostToolUse 会紧接着到达，
+      // 若暂存 PreToolUse 则 PostToolUse 可能先到达导致客户端创建两条重复的 DisplayItem。
+      if (isInteractive && isInteractivePreToolUse(eventName, hookEvent)) {
         this.streamManager?.holdInteractive(sessionMsg);
       } else {
         this.streamManager?.push(sessionMsg);
@@ -245,7 +251,10 @@ export class HookHandler {
         this.sessionStore.setSource(sessionId, reconciledSource ?? 'desktop');
       }
 
-      if (resolvedCwd) recordRecentCwd(this.pidDir, resolvedCwd);
+      if (resolvedCwd) {
+        recordRecentCwd(this.pidDir, resolvedCwd);
+        this.sessionStore.setCwd(sessionId, resolvedCwd);
+      }
 
       const updated = this.sessionStore.get(sessionId);
       this.broadcastAll({ type: 'session_start', session: updated ?? info });
@@ -375,7 +384,7 @@ export class HookHandler {
     }
 
     const now = Date.now();
-    const dedupKey = `${event.event_name}:${event.tool_name ?? ''}`;
+    const dedupKey = `${sessionId}:${event.event_name}:${event.tool_name ?? ''}`;
     const last = this.recentPushes.get(dedupKey);
     if (last !== undefined && now - last < HookHandler.DEDUP_WINDOW_MS) {
       console.log('[Push] skip: dedup %s (%dms ago)', dedupKey, now - last);
@@ -393,6 +402,7 @@ export class HookHandler {
     this.activePushControllers.set(controllerKey, controller);
 
     console.log('[Push] sending push to device %s for event %s/%s', takeoverDevice.deviceId, event.event_name, eventId);
+    const sessionInfo = this.sessionStore.get(sessionId);
     this.pushService.sendPush(takeoverDevice.pushToken, {
       sessionId,
       eventId,
@@ -401,6 +411,7 @@ export class HookHandler {
       content: extractContent(event.tool_input),
       locale: takeoverDevice.locale,
       environment: takeoverDevice.pushEnvironment,
+      sessionName: sessionInfo?.displayName,
     }, controller.signal).then((result) => {
       this.activePushControllers.delete(controllerKey);
       if (!result.ok) {

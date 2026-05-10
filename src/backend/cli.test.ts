@@ -100,6 +100,32 @@ vi.mock("node:child_process", () => ({
   }),
 }));
 
+// Mock ws for refresh-skills command — 使用 var 避免 vi.mock 提升时的 TDZ 问题
+var mockWsInstances: Array<{
+  on: ReturnType<typeof vi.fn>;
+  send: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
+}> = [];
+var mockWsOnOpen: (() => void) | undefined;
+var mockWsOnMessage: ((data: Buffer) => void) | undefined;
+var mockWsOnError: (() => void) | undefined;
+
+vi.mock("ws", () => ({
+  WebSocket: vi.fn(function (this: any) {
+    const instance = {
+      on: vi.fn((event: string, handler: (...args: any[]) => void) => {
+        if (event === 'open') mockWsOnOpen = handler;
+        if (event === 'message') mockWsOnMessage = handler;
+        if (event === 'error') mockWsOnError = handler;
+      }),
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    mockWsInstances.push(instance);
+    return instance;
+  }),
+}));
+
 // ── Helpers ──
 
 const testPidDir = join(tmpdir(), "mypilot-cli-test");
@@ -122,6 +148,10 @@ describe("runCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sigintHandler = undefined;
+    mockWsInstances.length = 0;
+    mockWsOnOpen = undefined;
+    mockWsOnMessage = undefined;
+    mockWsOnError = undefined;
     cleanPidDir();
   });
 
@@ -641,6 +671,85 @@ describe("runCli", () => {
       } catch (e) {
         expect(e).toBeInstanceOf(ExitError);
       }
+    });
+  });
+
+  // ── refresh-skills command ──
+
+  describe("refresh-skills", () => {
+    it("connects to gateway via WebSocket and prints commands list", async () => {
+      // Import encrypt to create mock response
+      const { encrypt } = await import("./gateway/crypto.js");
+
+      const refreshPromise = runCli(makeArgv("refresh-skills"), testPidDir, testPidPath);
+
+      // Wait for mock WebSocket to be constructed and open handler registered
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Simulate open event
+      expect(mockWsOnOpen).toBeDefined();
+      mockWsOnOpen!();
+
+      // Verify refresh_commands was sent
+      expect(mockWsInstances.length).toBeGreaterThan(0);
+      expect(mockWsInstances[0].send).toHaveBeenCalled();
+
+      // Simulate commands_list response — process.exit(0) 抛出 ExitError，需提前 catch
+      const response = encrypt(MOCK_KEY, JSON.stringify({
+        type: 'commands_list',
+        commands: [
+          { name: '/clear', description: 'Clear context', requiresArgs: false },
+          { name: '/plan', description: 'Enter plan mode', requiresArgs: false },
+        ],
+      }));
+
+      let exitCode: number | undefined;
+      try {
+        expect(mockWsOnMessage).toBeDefined();
+        mockWsOnMessage!(Buffer.from(response, 'utf-8'));
+        // process.exit(0) 抛出 ExitError，不应到达这里
+        await refreshPromise;
+        expect.fail('should have thrown ExitError');
+      } catch (e) {
+        if (e instanceof ExitError) {
+          exitCode = e.code;
+        } else {
+          throw e;
+        }
+      }
+
+      expect(exitCode).toBe(0);
+      expect(mockWsInstances[0].close).toHaveBeenCalled();
+      const output = consoleLogSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(output).toContain("Refreshed");
+      expect(output).toContain("/clear");
+      expect(output).toContain("/plan");
+    });
+
+    it("shows error when WebSocket connection fails", async () => {
+      const refreshPromise = runCli(makeArgv("refresh-skills"), testPidDir, testPidPath);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Simulate error event — process.exit(1) 抛出 ExitError，需提前 catch
+      let exitCode: number | undefined;
+      try {
+        expect(mockWsOnError).toBeDefined();
+        mockWsOnError!();
+        // process.exit(1) 抛出，不应到达这里
+        await refreshPromise;
+        expect.fail('should have thrown ExitError');
+      } catch (e) {
+        if (e instanceof ExitError) {
+          exitCode = e.code;
+        } else {
+          throw e;
+        }
+      }
+
+      expect(exitCode).toBe(1);
+      const errorOutput = consoleErrorSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(errorOutput).toContain("Failed to connect");
     });
   });
 });

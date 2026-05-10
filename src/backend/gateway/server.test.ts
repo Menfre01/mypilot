@@ -862,4 +862,58 @@ describe('createServer', () => {
     ws2.close();
     await waitForClose(ws2);
   });
+
+  // ── refresh_commands handler ──
+
+  it('refresh_commands returns commands_list with built-in commands', async () => {
+    server = createServer(port, logDir, logDir, TEST_KEY);
+    await server.start();
+
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
+    await waitForMessage(ws, TEST_KEY); // consume initial connected message
+
+    // Send refresh_commands (encrypted)
+    encSend(ws, TEST_KEY, { type: 'refresh_commands' });
+
+    const msg = await waitForMessage(ws, TEST_KEY);
+    const parsed = JSON.parse(msg);
+    expect(parsed.type).toBe('commands_list');
+    expect(Array.isArray(parsed.commands)).toBe(true);
+    expect(parsed.commands.length).toBeGreaterThanOrEqual(11);
+
+    // 验证内置命令存在
+    const names = parsed.commands.map((c: any) => c.name);
+    expect(names).toContain('/clear');
+    expect(names).toContain('/compact');
+    expect(names).toContain('/simplify');
+    expect(names).toContain('/review');
+    expect(names).toContain('/plan');
+    expect(names).toContain('/init');
+    expect(names).toContain('/insights');
+
+    ws.close();
+    await waitForClose(ws);
+  });
+
+  it('refresh_commands response contains name, description, requiresArgs fields', async () => {
+    server = createServer(port, logDir, logDir, TEST_KEY);
+    await server.start();
+
+    const ws = new WebSocket(wsUrl(port, TEST_KEY_B64));
+    await waitForMessage(ws, TEST_KEY); // consume initial connected message
+
+    encSend(ws, TEST_KEY, { type: 'refresh_commands' });
+    const msg = await waitForMessage(ws, TEST_KEY);
+    const parsed = JSON.parse(msg);
+
+    for (const cmd of parsed.commands) {
+      expect(typeof cmd.name).toBe('string');
+      expect(cmd.name.startsWith('/')).toBe(true);
+      expect(typeof cmd.description).toBe('string');
+      expect(typeof cmd.requiresArgs).toBe('boolean');
+    }
+
+    ws.close();
+    await waitForClose(ws);
+  });
 });

@@ -184,9 +184,14 @@ export function createServer(
   };
 
   function sendJSON(res: ServerResponse, status: number, data: unknown): void {
-    const body = JSON.stringify(data);
-    res.writeHead(status, { 'Content-Type': 'application/json', ...CORS_HEADERS });
-    res.end(body);
+    try {
+      const body = JSON.stringify(data);
+      res.writeHead(status, { 'Content-Type': 'application/json', ...CORS_HEADERS });
+      res.end(body);
+    } catch (err) {
+      // 响应可能已经发送（连接关闭等）
+      console.error('[sendJSON] failed:', (err as Error).message);
+    }
   }
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -326,12 +331,18 @@ export function createServer(
         // 手机端也使用 PTY 模式（而非 headless/--print），
         // 因为 --print 是一次性模式，进程会立即退出。
         // PTY 模式保持 Claude Code TUI 持续运行，与桌面行为一致。
-        processManager.spawnPTY(initialId, {
-          cwd: message.cwd,
-          model: message.model,
-          displayName,
-          source: 'mobile',
-        });
+        try {
+          processManager.spawnPTY(initialId, {
+            cwd: message.cwd,
+            model: message.model,
+            displayName,
+            source: 'mobile',
+          });
+        } catch (err) {
+          console.error('[Gateway] start_session spawnPTY failed: %s', (err as Error).message);
+          wsBus.broadcast({ type: 'session_error', sessionId: initialId, message: `启动 session 失败: ${(err as Error).message}` }, deviceId);
+          break;
+        }
 
         // cwd 由 HookHandler 在 SessionStart 对账时统一记录
         broadcastSessionState(undefined, deviceId);
@@ -396,6 +407,12 @@ export function createServer(
         deviceStore.setConnected(deviceId, false);
         wsBus.disconnect(deviceId);
         break;
+      case 'refresh_commands': {
+        const commands = getAllCommands();
+        wsBus.broadcast({ type: 'commands_list', commands }, deviceId);
+        console.log('[Commands] refreshed: %d built-in + scanned', commands.length);
+        break;
+      }
       case 'stop_session':
         processManager.kill(message.sessionId);
         break;

@@ -143,7 +143,7 @@ describe('HookHandler', () => {
       expect(result).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
     });
 
-    it('Stop returns immediately (no longer blocks after downgrade)', async () => {
+    it('Stop returns immediately (push-only, 不阻塞)', async () => {
       const result = await handler.handleEvent(makeEvent('Stop', 's1'));
       expect(result).toEqual({});
     });
@@ -214,7 +214,7 @@ describe('HookHandler', () => {
       expect(result).toEqual({});
     });
 
-    it('SubagentStop returns {} immediately (not interactive)', async () => {
+    it('SubagentStop returns {} immediately (push-only, 不阻塞)', async () => {
       const result = await handler.handleEvent(makeEvent('SubagentStop', 's1'));
       expect(result).toEqual({});
     });
@@ -760,6 +760,69 @@ describe('HookHandler', () => {
       // 释放阻塞交互，让 handleEvent 完成
       pendingStore.releaseAll();
       await expect(handlePromise).resolves.toBeDefined();
+    });
+
+    it('Stop 事件在 takeover 模式下触发推送但立即返回 {}', async () => {
+      const pushService = new PushService('https://push.example.com', 'test-key', 'gw-1');
+      const pushSpy = vi.spyOn(pushService, 'sendPush').mockResolvedValue({ ok: true });
+      const handlerWithPush = new HookHandler(
+        sessionStore, pendingStore, deviceStore, wsBus, pidDir, eventLogger, pushService,
+      );
+      handlerWithPush.setStreamManager(streamManager);
+
+      deviceStore.register('ios-device', 'ios', 'en');
+      deviceStore.setPushToken('ios-device', 'token-abc', 'sandbox');
+      deviceStore.setConnected('ios-device', false);
+      handlerWithPush.setMode('takeover', 'ios-device');
+
+      const result = await handlerWithPush.handleEvent(makeEvent('Stop', 's1'));
+
+      // 立即返回 {}，不阻塞
+      expect(result).toEqual({});
+      expect(pushSpy).toHaveBeenCalledTimes(1);
+      expect(pushSpy).toHaveBeenCalledWith(
+        'token-abc',
+        expect.objectContaining({ eventName: 'Stop' }),
+        expect.any(AbortSignal),
+      );
+    });
+
+    it('SubagentStop 在 takeover 模式下不触发推送，立即返回 {}', async () => {
+      const pushService = new PushService('https://push.example.com', 'test-key', 'gw-1');
+      const pushSpy = vi.spyOn(pushService, 'sendPush').mockResolvedValue({ ok: true });
+      const handlerWithPush = new HookHandler(
+        sessionStore, pendingStore, deviceStore, wsBus, pidDir, eventLogger, pushService,
+      );
+      handlerWithPush.setStreamManager(streamManager);
+
+      deviceStore.register('ios-device', 'ios', 'en');
+      deviceStore.setPushToken('ios-device', 'token-abc', 'sandbox');
+      deviceStore.setConnected('ios-device', false);
+      handlerWithPush.setMode('takeover', 'ios-device');
+
+      const result = await handlerWithPush.handleEvent(makeEvent('SubagentStop', 's1'));
+
+      expect(result).toEqual({});
+      expect(pushSpy).not.toHaveBeenCalled();
+    });
+
+    it('Stop 事件在设备 WebSocket 已连接且活跃时跳过推送', async () => {
+      const pushService = new PushService('https://push.example.com', 'test-key', 'gw-1');
+      const pushSpy = vi.spyOn(pushService, 'sendPush').mockResolvedValue({ ok: true });
+      const handlerWithPush = new HookHandler(
+        sessionStore, pendingStore, deviceStore, wsBus, pidDir, eventLogger, pushService,
+      );
+      handlerWithPush.setStreamManager(streamManager);
+
+      deviceStore.register('ios-device', 'ios', 'en');
+      deviceStore.setPushToken('ios-device', 'token-abc', 'sandbox');
+      deviceStore.setConnected('ios-device', true); // WS 已连接
+      handlerWithPush.setMode('takeover', 'ios-device');
+
+      await handlerWithPush.handleEvent(makeEvent('Stop', 's1'));
+
+      // WS 连接活跃，应跳过推送
+      expect(pushSpy).not.toHaveBeenCalled();
     });
   });
 

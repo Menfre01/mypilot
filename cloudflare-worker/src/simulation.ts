@@ -12,11 +12,14 @@ export interface SimStep {
 export interface SimSession {
   id: string;
   colorIndex: number;
+  displayName?: string;
+  source?: 'desktop' | 'mobile' | 'detached';
+  cwd?: string;
 }
 
-const S1: SimSession = { id: '6417e43a-ff2c-4220-a6dd-4af696d190c6', colorIndex: 0 };
-const S2: SimSession = { id: 'e2166cb5-ec67-4d38-9395-4422a9db270f', colorIndex: 1 };
-const S3: SimSession = { id: '068bd86a-c7e0-4f4a-817b-c7e35a08f614', colorIndex: 2 };
+const S1: SimSession = { id: '6417e43a-ff2c-4220-a6dd-4af696d190c6', colorIndex: 0, displayName: 'Auth Refactor', source: 'desktop', cwd: '/Users/menfre/Workbench/mypilot' };
+const S2: SimSession = { id: 'e2166cb5-ec67-4d38-9395-4422a9db270f', colorIndex: 1, displayName: 'Payment Tests', source: 'desktop', cwd: '/Users/menfre/Workbench/mypilot' };
+const S3: SimSession = { id: '068bd86a-c7e0-4f4a-817b-c7e35a08f614', colorIndex: 2, displayName: 'Deploy Monitor', source: 'desktop', cwd: '/Users/menfre/Workbench/mypilot' };
 
 const now = () => Date.now();
 let seq = 0;
@@ -39,6 +42,9 @@ export function toSessionInfo(s: SimSession): SessionInfo & { startedAt: number 
     color: COLORS[s.colorIndex],
     colorIndex: s.colorIndex,
     startedAt: now(),
+    displayName: s.displayName,
+    source: s.source,
+    cwd: s.cwd,
   };
 }
 
@@ -63,6 +69,9 @@ export function buildDemoScript(): SimStep[] {
   script.push({ delay: 800, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'src/auth/middleware.ts' }, tool_use_id: 'call_003', timestamp: ts() } });
   script.push({ delay: 2000, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: 'src/auth/middleware.ts' }, tool_result: 'export async function validateToken(token: string): Promise<User> {\n  const decoded = jwt.verify(token, SECRET);\n  return decoded;\n}', tool_use_id: 'call_003', timestamp: ts() } });
 
+  // CwdChanged — demo 展示目录切换事件
+  script.push({ delay: 500, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'CwdChanged', cwd: '/Users/menfre/Workbench/mypilot/src/auth', timestamp: ts() } });
+
   // Bash tool
   script.push({ delay: 1000, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test -- --grep auth', description: 'Run auth tests' }, tool_use_id: 'call_004', timestamp: ts() } });
   script.push({ delay: 3000, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'npm test -- --grep auth' }, tool_result: 'PASS src/auth/login.test.ts (2.1s)\n  ✓ should validate token correctly\n  ✓ should reject expired tokens\n\nTests: 2 passed, 2 total', tool_use_id: 'call_004', timestamp: ts() } });
@@ -70,10 +79,14 @@ export function buildDemoScript(): SimStep[] {
   // Edit tool
   script.push({ delay: 1000, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: 'src/auth/middleware.ts', old_string: 'const decoded = jwt.verify(token, SECRET);', new_string: 'const decoded = jwt.verify(token, SECRET, { algorithms: [\'HS256\'] });' }, tool_use_id: 'call_005', timestamp: ts() } });
   script.push({ delay: 1500, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: 'src/auth/middleware.ts' }, tool_result: 'Successfully edited src/auth/middleware.ts', tool_use_id: 'call_005', timestamp: ts() } });
+  // FileChanged — demo 展示文件变更事件
+  script.push({ delay: 300, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'FileChanged', file_path: 'src/auth/middleware.ts', timestamp: ts() } });
 
   // Write tool
   script.push({ delay: 800, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: 'src/auth/constants.ts', content: 'export const TOKEN_EXPIRY = \'24h\';\nexport const REFRESH_EXPIRY = \'7d\';\n' }, tool_use_id: 'call_006', timestamp: ts() } });
   script.push({ delay: 1200, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: 'src/auth/constants.ts' }, tool_result: 'Successfully wrote src/auth/constants.ts', tool_use_id: 'call_006', timestamp: ts() } });
+  // FileChanged — demo 展示新文件创建事件
+  script.push({ delay: 300, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'FileChanged', file_path: 'src/auth/constants.ts', timestamp: ts() } });
 
   // Notification
   script.push({ delay: 1000, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'Notification', message: 'All auth tests passing after refactoring', title: 'Tests Passed', timestamp: ts() } });
@@ -92,6 +105,8 @@ export function buildDemoScript(): SimStep[] {
   // Fix the error
   script.push({ delay: 1000, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: 'src/auth/middleware.ts', old_string: 'return decoded;', new_string: 'return decoded as User;' }, tool_use_id: 'call_008', timestamp: ts() } });
   script.push({ delay: 1000, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: 'src/auth/middleware.ts' }, tool_result: 'Successfully edited src/auth/middleware.ts', tool_use_id: 'call_008', timestamp: ts() } });
+  // FileChanged — demo 展示文件修改事件
+  script.push({ delay: 300, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'FileChanged', file_path: 'src/auth/middleware.ts', timestamp: ts() } });
   script.push({ delay: 800, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test', description: 'Run all tests' }, tool_use_id: 'call_009', timestamp: ts() } });
   script.push({ delay: 2500, action: 'event', sessionId: S1.id, event: { session_id: S1.id, event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_result: 'PASS src/auth/login.test.ts (2.1s)\nPASS src/auth/middleware.test.ts (1.8s)\n\nTests: 4 passed, 4 total\nAll tests passed!', tool_use_id: 'call_009', timestamp: ts() } });
 

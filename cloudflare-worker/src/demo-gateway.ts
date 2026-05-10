@@ -2,8 +2,9 @@ import type {
   GatewayMessage, GatewayConnected, GatewayEvent, GatewaySessionStart,
   GatewaySessionEnd, GatewayModeChanged, GatewayTranscriptEntry,
   SessionInfo, SSEHookEvent, PendingInteraction, SessionEvent,
-  ClientMessage, GatewayMode, PushEnvironment, DevicePlatform,
+  ClientMessage, GatewayMode, APNEnvironment, DevicePlatform,
   TranscriptEntry, TranscriptBlock, TokenUsage,
+  CommandItem, TokenStatsPayload, DirectoryItem,
 } from './protocol';
 import { DEMO_KEY_B64, SESSION_COLORS, PROTOCOL_VERSION } from './protocol';
 import { importKey, encrypt, decrypt } from './crypto';
@@ -18,7 +19,7 @@ interface DeviceInfo {
   platform?: DevicePlatform;
   locale?: string;
   pushToken?: string;
-  pushEnvironment?: PushEnvironment;
+  pushEnvironment?: APNEnvironment;
 }
 
 interface PushRelayConfig {
@@ -39,6 +40,56 @@ const DEFAULT_PUSH_RELAY_URL = 'https://mypilot-push-relay.menfre.workers.dev';
 const DEMO_GATEWAY_ID = 'demo-gateway';
 const PUSH_FETCH_TIMEOUT = 5_000;
 const PUSH_RELAY_RETRY_INTERVAL = 30_000;
+
+const DEMO_COMMANDS: CommandItem[] = [
+  { name: '/clear', description: 'Start a new conversation with empty context', requiresArgs: false },
+  { name: '/compact', description: 'Free up context by summarizing the conversation', requiresArgs: false },
+  { name: '/rename', description: 'Rename the current session', requiresArgs: true },
+  { name: '/simplify', description: 'Review recent changes for quality and efficiency', requiresArgs: false },
+  { name: '/review', description: 'Review a pull request locally', requiresArgs: true },
+  { name: '/security-review', description: 'Analyze pending changes for security vulnerabilities', requiresArgs: false },
+  { name: '/plan', description: 'Enter plan mode for a complex task', requiresArgs: false },
+  { name: '/init', description: 'Initialize project with a CLAUDE.md guide', requiresArgs: false },
+  { name: '/btw', description: 'Ask a quick side question without adding to history', requiresArgs: true },
+  { name: '/export', description: 'Export the current conversation as plain text', requiresArgs: true },
+  { name: '/insights', description: 'Generate report analyzing your Claude Code sessions', requiresArgs: false },
+];
+
+const DEMO_DIRECTORIES: DirectoryItem[] = [
+  { path: '/Users/menfre/Workbench/mypilot', label: 'mypilot', source: 'current' },
+  { path: '/Users/menfre/Workbench/cc-notify', label: 'cc-notify', source: 'suggestion' },
+  { path: '/Users/menfre/Workbench/other-project', label: 'other-project', source: 'recent' },
+];
+
+function buildDemoTokenStats(): TokenStatsPayload {
+  const now = new Date();
+  const today = now.toISOString().split('T')[0];
+  const yesterday = new Date(now.getTime() - 86400000).toISOString().split('T')[0];
+  return {
+    records: {
+      [today]: {
+        'Claude Opus 4': {
+          input: { input: 245000, output: 32000, cacheRead: 180000, cacheCreation: 5000 },
+          output: { input: 0, output: 32000, cacheRead: 0, cacheCreation: 0 },
+          total: { input: 245000, output: 32000, cacheRead: 180000, cacheCreation: 5000 },
+        },
+        'Claude Sonnet 4': {
+          input: { input: 120000, output: 15000, cacheRead: 80000, cacheCreation: 2000 },
+          output: { input: 0, output: 15000, cacheRead: 0, cacheCreation: 0 },
+          total: { input: 120000, output: 15000, cacheRead: 80000, cacheCreation: 2000 },
+        },
+      },
+      [yesterday]: {
+        'Claude Opus 4': {
+          input: { input: 180000, output: 28000, cacheRead: 120000, cacheCreation: 3000 },
+          output: { input: 0, output: 28000, cacheRead: 0, cacheCreation: 0 },
+          total: { input: 180000, output: 28000, cacheRead: 120000, cacheCreation: 3000 },
+        },
+      },
+    },
+    lastUpdated: now.toISOString(),
+  };
+}
 
 export class DemoGatewayDO implements DurableObject {
   private state: DurableObjectState;
@@ -154,6 +205,8 @@ export class DemoGatewayDO implements DurableObject {
       recentEvents: this.doState.events.slice(-200),
       pendingInteractions: Object.values(this.doState.pending),
       takeoverOwner: this.doState.takeoverOwner ?? undefined,
+      commands: DEMO_COMMANDS,
+      tokenStats: buildDemoTokenStats(),
     };
   }
 
@@ -186,10 +239,56 @@ export class DemoGatewayDO implements DurableObject {
         case 'interact':
           this.handleInteract(msg.eventId, msg.sessionId, msg.response);
           break;
+        case 'start_session': {
+          // Demo: 模拟 PTY 会话创建 — 创建一个假的 session 并广播
+          const demoSessionId = `demo-pty-${Date.now().toString(36)}`;
+          const colorIndex = Object.keys(this.doState.sessions).length % 8;
+          const session: SessionInfo = {
+            id: demoSessionId,
+            color: SESSION_COLORS[colorIndex],
+            colorIndex,
+            startedAt: Date.now(),
+            displayName: msg.displayName ?? 'New Session',
+            source: 'mobile',
+            cwd: msg.cwd,
+          };
+          this.doState.sessions[demoSessionId] = session;
+          this.enqueue(() => this.broadcast({ type: 'session_start', session }));
+          // 返回 session_status_changed 通知客户端源
+          this.enqueue(() => this.broadcast({ type: 'session_status_changed', sessionId: demoSessionId, source: 'mobile' }));
+          break;
+        }
+        case 'send_prompt': {
+          // Demo: 模拟接收 prompt — 在会话中回显一条用户 prompt transcript
+          const session = this.doState.sessions[msg.sessionId];
+          if (session) {
+            const now = Date.now();
+            this.emitTranscript(msg.sessionId, {
+              index: this.nextIndex(),
+              type: 'user',
+              timestamp: now,
+              blocks: [{ type: 'text', text: msg.prompt }],
+            });
+            // 模拟一条 assistant 回应
+            this.emitTranscript(msg.sessionId, {
+              index: this.nextIndex(),
+              type: 'assistant',
+              timestamp: now + 500,
+              model: 'Claude Opus 4',
+              usage: this.baseUsage(),
+              blocks: [{ type: 'text', text: `Demo response to: "${msg.prompt.slice(0, 50)}${msg.prompt.length > 50 ? '...' : ''}" — this is a simulated PTY session for App Store review.` }],
+            });
+          }
+          break;
+        }
+        case 'stop_session':
         case 'delete_session':
           delete this.doState.sessions[msg.sessionId];
           this.doState.events = this.doState.events.filter(e => e.sessionId !== msg.sessionId);
           this.enqueue(() => this.broadcast({ type: 'session_end', sessionId: msg.sessionId }));
+          break;
+        case 'interrupt_session':
+          // Demo: interrupt is a no-op in simulation
           break;
         case 'register_device': {
           this.devices.set(deviceId, { platform: msg.platform, locale: msg.locale });
@@ -207,6 +306,33 @@ export class DemoGatewayDO implements DurableObject {
           break;
         case 'disconnect':
           // Client is about to close — no action needed.
+          break;
+        case 'request_token_stats':
+          this.enqueue(async () => {
+            await this.sendEncrypted(ws, { type: 'token_stats_update', stats: buildDemoTokenStats() });
+          });
+          break;
+        case 'request_directories':
+          this.enqueue(async () => {
+            await this.sendEncrypted(ws, { type: 'directories_list', items: DEMO_DIRECTORIES });
+          });
+          break;
+        case 'validate_path':
+          this.enqueue(async () => {
+            // Demo: 简单验证 — 所有以 /Users 开头的路径都接受
+            const ok = msg.path.startsWith('/Users/') || msg.path.startsWith('/home/');
+            await this.sendEncrypted(ws, {
+              type: 'validate_path_result',
+              path: msg.path,
+              ok,
+              error: ok ? undefined : 'Path does not exist or is not accessible',
+            });
+          });
+          break;
+        case 'refresh_commands':
+          this.enqueue(async () => {
+            await this.sendEncrypted(ws, { type: 'commands_list', commands: DEMO_COMMANDS });
+          });
           break;
       }
     } catch (e) {
@@ -329,7 +455,8 @@ export class DemoGatewayDO implements DurableObject {
     const { info } = pushDevice;
     const eventName = event.event_name;
     const toolName = event.tool_name;
-    const notification = getNotification(eventName, toolName);
+    const sessionName = this.doState.sessions[event.session_id]?.displayName;
+    const notification = getNotification(eventName, toolName, sessionName);
 
     const config = await this.getPushRelayConfig();
     if (!config) return;
@@ -675,24 +802,25 @@ function getAnswerText(response: Record<string, unknown>): string {
   return JSON.stringify(response);
 }
 
-function getNotification(eventName: string, toolName?: string): { title: string; body: string; category?: string } {
+function getNotification(eventName: string, toolName?: string, sessionName?: string): { title: string; body: string; category?: string } {
+  const session = sessionName ?? 'Claude';
   switch (eventName) {
     case 'PermissionRequest':
-      return { category: 'APPROVAL', title: 'Approval Needed', body: `Wants to use ${toolName ?? 'tool'}` };
+      return { category: 'APPROVAL', title: 'Approval Needed', body: `${session}: Claude wants to use ${toolName ?? 'tool'}` };
     case 'Stop':
     case 'SubagentStop':
-      return { category: 'STOP', title: 'Stop Request', body: 'Wants to stop and wait for your input' };
+      return { category: 'STOP', title: 'Stop Request', body: `${session}: Claude task completed` };
     case 'Elicitation':
-      return { title: 'Question', body: 'Has a question for you' };
+      return { title: 'Question', body: `${session}: Claude has a question` };
     case 'PreToolUse':
       if (toolName === 'AskUserQuestion') {
-        return { title: 'Question', body: 'Has a question for you' };
+        return { title: 'Question', body: `${session}: Claude has a question` };
       }
       if (toolName === 'ExitPlanMode') {
-        return { title: 'Plan Ready', body: 'Wants to exit plan mode for your review' };
+        return { title: 'Plan Review', body: `${session}: Claude wants to exit plan mode` };
       }
-      return { title: 'Approval Needed', body: `Wants to use ${toolName ?? 'tool'}` };
+      return { title: 'Approval Needed', body: `${session}: Claude wants to use ${toolName ?? 'tool'}` };
     default:
-      return { title: 'MyPilot', body: 'New interaction event' };
+      return { title: 'MyPilot', body: `${session}: New interaction event` };
   }
 }

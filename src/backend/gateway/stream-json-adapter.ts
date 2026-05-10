@@ -1,6 +1,12 @@
 import { classifyEntry } from './transcript-reader.js';
 import type { SessionMessage, SSEHookEvent } from '../../shared/protocol.js';
 
+const STREAM_JSON_INTERNALS = new Set([
+  'type', 'subtype', 'session_id', 'message', 'uuid',
+  'parent_tool_use_id', 'cwd', 'model', 'tools', 'usage',
+  'duration_ms', 'stop_reason',
+]);
+
 interface StreamJsonMessage {
   type: string;
   subtype?: string;
@@ -41,13 +47,14 @@ export function adaptStreamJsonLine(
     case 'user': {
       const parsed = classifyEntry(msg as unknown as Record<string, unknown>);
       if (!parsed) return null;
+      const seq = nextSeq();
       return {
         sessionId,
-        seq: nextSeq(),
+        seq,
         timestamp,
         source: 'transcript',
         entry: {
-          index: -1,
+          index: seq,
           type: msg.type as 'assistant' | 'user',
           timestamp,
           model: parsed.model,
@@ -65,7 +72,12 @@ export function adaptStreamJsonLine(
           event_id: msg.hook_id ?? '',
           timestamp,
         };
-        if (msg.hook_name) event.hook_name = msg.hook_name;
+        // 复制所有非 stream-json 内部的字段（如 tool_name、tool_input、custom_field 等）
+        for (const [key, value] of Object.entries(msg)) {
+          if (!STREAM_JSON_INTERNALS.has(key)) {
+            event[key] = value;
+          }
+        }
         return {
           sessionId,
           seq: nextSeq(),

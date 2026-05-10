@@ -4,7 +4,7 @@ import { t, translations, type Locale } from './i18n.js';
 describe('i18n', () => {
   it('returns English by default', () => {
     expect(t('permissionRequest')).toBe('Permission Request');
-    expect(t('wantsToStop')).toBe('Claude wants to stop');
+    expect(t('wantsToStop')).toBe('{session}: Claude task completed');
   });
 
   it('returns English for explicit en locale', () => {
@@ -17,9 +17,9 @@ describe('i18n', () => {
     expect(t('stopRequest', 'zh-CN')).toBe('停止请求');
     expect(t('question', 'zh-CN')).toBe('问题');
     expect(t('planReview', 'zh-CN')).toBe('计划审查');
-    expect(t('wantsToStop', 'zh-CN')).toBe('Claude 请求停止');
-    expect(t('hasAQuestion', 'zh-CN')).toBe('Claude 有问题');
-    expect(t('newInteractionEvent', 'zh-CN')).toBe('新交互事件');
+    expect(t('wantsToStop', 'zh-CN')).toBe('{session}: Claude 有任务完成');
+    expect(t('hasAQuestion', 'zh-CN')).toBe('{session}: Claude 有问题');
+    expect(t('newInteractionEvent', 'zh-CN')).toBe('{session}: 新交互事件');
   });
 
   it('falls back to English for unknown locale', () => {
@@ -28,8 +28,8 @@ describe('i18n', () => {
   });
 
   it('substitutes template params', () => {
-    expect(t('wantsToUse', 'en', { tool: 'Bash' })).toBe('Claude wants to use Bash');
-    expect(t('wantsToUse', 'zh-CN', { tool: 'Bash' })).toBe('请求使用 Bash');
+    expect(t('wantsToUse', 'en', { tool: 'Bash' })).toBe('{session}: Claude wants to use Bash');
+    expect(t('wantsToUse', 'zh-CN', { tool: 'Bash' })).toBe('{session}: 请求使用 Bash');
   });
 
   it('returns MyPilot unchanged in both locales', () => {

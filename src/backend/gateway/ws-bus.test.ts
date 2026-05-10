@@ -87,6 +87,17 @@ describe('WsBus', () => {
     expect(ws.readyState).toBe(ws.CLOSED);
   });
 
+  it('handleUpgrade returns false when wss is null (before attach)', () => {
+    const bus = new WsBus(TEST_KEY);
+    // attach() 未被调用，this.keyB64 为 ''，path 匹配 /ws-gateway 但 key 传空以通过 key 检查
+    const req = { url: '/ws-gateway?key=', headers: {} } as any;
+    const socket = { write: vi.fn(), destroy: vi.fn() } as any;
+    const head = Buffer.alloc(0);
+
+    const result = bus.handleUpgrade(req, socket, head);
+    expect(result).toBe(false);
+  });
+
   it('sendSessionList sends connected message with sessions and mode', async () => {
     const sessions: SessionInfo[] = [
       { id: 's1', color: '#89b4fa', colorIndex: 0, startedAt: 1000 },

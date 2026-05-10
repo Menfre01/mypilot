@@ -247,4 +247,190 @@ describe('SessionStreamManager', () => {
 
     expect(ssm.nextSeqFn()).toBe(1);
   });
+
+  // ── holdInteractive（交互式 PreToolUse 暂存） ──
+
+  it('交互式 PreToolUse（AskUserQuestion）暂存等待 transcript 条目，到达后释放', () => {
+    const ssm = new SessionStreamManager(eventLogger, wsBus, { pipelineCapacity: 20 });
+
+    // 调用 holdInteractive 暂存
+    ssm.holdInteractive({
+      sessionId: 's1', seq: 1, timestamp: Date.now(), source: 'hook',
+      event: {
+        session_id: 's1',
+        event_name: 'PreToolUse',
+        tool_name: 'AskUserQuestion',
+        tool_use_id: 'tu-ask-1',
+      },
+    });
+
+    // 管道中不应有此消息（被暂存）
+    expect(ssm.pull(10)).toHaveLength(0);
+
+    // 推入对应的 transcript 条目（含 tool_use block）
+    ssm.push({
+      sessionId: 's1', seq: 2, timestamp: Date.now(), source: 'transcript',
+      entry: {
+        index: 1,
+        type: 'assistant',
+        timestamp: Date.now(),
+        blocks: [{ type: 'tool_use', id: 'tu-ask-1', name: 'AskUserQuestion', input: {} }],
+      },
+    });
+
+    // 暂存的消息应被释放到管道，pull 按 seq 升序排列
+    const msgs = ssm.pull(10);
+    expect(msgs).toHaveLength(2);
+    // hook 释放时 seq 被重新分配（nextSeqFn 首次调用返回 1），transcript seq=2
+    expect(msgs[0].source).toBe('hook');
+    expect(msgs[1].source).toBe('transcript');
+    expect(msgs[0].seq).toBeLessThan(msgs[1].seq);
+  });
+
+  it('交互式 PreToolUse（ExitPlanMode）同样暂存并在对应 transcript 到达后释放', () => {
+    const ssm = new SessionStreamManager(eventLogger, wsBus, { pipelineCapacity: 20 });
+
+    ssm.holdInteractive({
+      sessionId: 's1', seq: 1, timestamp: Date.now(), source: 'hook',
+      event: {
+        session_id: 's1',
+        event_name: 'PreToolUse',
+        tool_name: 'ExitPlanMode',
+        tool_use_id: 'tu-epm-1',
+      },
+    });
+
+    expect(ssm.pull(10)).toHaveLength(0);
+
+    ssm.push({
+      sessionId: 's1', seq: 2, timestamp: Date.now(), source: 'transcript',
+      entry: {
+        index: 1, type: 'assistant', timestamp: Date.now(),
+        blocks: [{ type: 'tool_use', id: 'tu-epm-1', name: 'ExitPlanMode', input: {} }],
+      },
+    });
+
+    const msgs = ssm.pull(10);
+    expect(msgs).toHaveLength(2);
+    // hook 释放后 seq 小于 transcript seq
+    expect(msgs[0].source).toBe('hook');
+    expect(msgs[1].source).toBe('transcript');
+  });
+
+  it('缺少 tool_use_id 的交互式事件直接进入管道', () => {
+    const ssm = new SessionStreamManager(eventLogger, wsBus, { pipelineCapacity: 20 });
+
+    ssm.push({
+      sessionId: 's1', seq: 1, timestamp: Date.now(), source: 'hook',
+      event: {
+        session_id: 's1',
+        event_name: 'PreToolUse',
+        tool_name: 'AskUserQuestion',
+        // 缺少 tool_use_id
+      },
+    });
+
+    const msgs = ssm.pull(10);
+    expect(msgs).toHaveLength(1);
+  });
+
+  it('非交互式 PreToolUse（如 Bash）直接进入管道', () => {
+    const ssm = new SessionStreamManager(eventLogger, wsBus, { pipelineCapacity: 20 });
+
+    ssm.push({
+      sessionId: 's1', seq: 1, timestamp: Date.now(), source: 'hook',
+      event: {
+        session_id: 's1',
+        event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_use_id: 'tu-bash-1',
+      },
+    });
+
+    const msgs = ssm.pull(10);
+    expect(msgs).toHaveLength(1);
+  });
+
+  it('非 PreToolUse 事件直接进入管道（不会被暂存）', () => {
+    const ssm = new SessionStreamManager(eventLogger, wsBus, { pipelineCapacity: 20 });
+
+    ssm.push({
+      sessionId: 's1', seq: 1, timestamp: Date.now(), source: 'hook',
+      event: {
+        session_id: 's1',
+        event_name: 'Notification',
+      },
+    });
+
+    const msgs = ssm.pull(10);
+    expect(msgs).toHaveLength(1);
+  });
+
+  it('暂存的交互式事件超时后自动释放到管道', () => {
+    vi.useFakeTimers();
+
+    const ssm = new SessionStreamManager(eventLogger, wsBus, { pipelineCapacity: 20 });
+
+    ssm.holdInteractive({
+      sessionId: 's1', seq: 1, timestamp: Date.now(), source: 'hook',
+      event: {
+        session_id: 's1',
+        event_name: 'PreToolUse',
+        tool_name: 'AskUserQuestion',
+        tool_use_id: 'tu-timeout-1',
+      },
+    });
+
+    expect(ssm.pull(10)).toHaveLength(0);
+
+    // 快进超过 INTERACTIVE_HOLD_TIMEOUT_MS (2000ms)
+    vi.advanceTimersByTime(2100);
+
+    const msgs = ssm.pull(10);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].source).toBe('hook');
+
+    vi.useRealTimers();
+  });
+
+  it('不同 session 的同名 tool_use_id 不会相互干扰', () => {
+    const ssm = new SessionStreamManager(eventLogger, wsBus, { pipelineCapacity: 20 });
+
+    // session s1 的交互式事件
+    ssm.holdInteractive({
+      sessionId: 's1', seq: 1, timestamp: Date.now(), source: 'hook',
+      event: {
+        session_id: 's1',
+        event_name: 'PreToolUse',
+        tool_name: 'AskUserQuestion',
+        tool_use_id: 'tu-same-id',
+      },
+    });
+
+    // session s2 的交互式事件（相同 tool_use_id）
+    ssm.holdInteractive({
+      sessionId: 's2', seq: 2, timestamp: Date.now(), source: 'hook',
+      event: {
+        session_id: 's2',
+        event_name: 'PreToolUse',
+        tool_name: 'AskUserQuestion',
+        tool_use_id: 'tu-same-id',
+      },
+    });
+
+    // 释放 s1 的对应 transcript
+    ssm.push({
+      sessionId: 's1', seq: 3, timestamp: Date.now(), source: 'transcript',
+      entry: {
+        index: 1, type: 'assistant', timestamp: Date.now(),
+        blocks: [{ type: 'tool_use', id: 'tu-same-id', name: 'AskUserQuestion', input: {} }],
+      },
+    });
+
+    const msgs = ssm.pull(10);
+    // s1 的 hook 应被释放，s2 的仍暂存
+    const hookMsgs = msgs.filter(m => m.source === 'hook');
+    expect(hookMsgs).toHaveLength(1);
+    expect(hookMsgs[0].sessionId).toBe('s1');
+  });
 });

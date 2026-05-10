@@ -132,8 +132,11 @@ export class WsBus {
       return true;
     }
 
+    if (!this.wss) return false;
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    this.wss!.handleUpgrade(req, socket as any, head, (ws) => {
+    this.wss.handleUpgrade(req, socket as any, head, (ws) => {
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       this.wss!.emit('connection', ws, req);
     });
     return true;

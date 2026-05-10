@@ -53,7 +53,7 @@ describe('PushService', () => {
       expect(body.gatewayId).toBe('gateway-123');
       expect(body.deviceToken).toBe('device-token-123');
       expect(body.payload.aps.alert.title).toBe('Permission Request');
-      expect(body.payload.aps.alert.body).toBe('Claude wants to use Bash');
+      expect(body.payload.aps.alert.body).toBe('#session-: Claude wants to use Bash');
       expect(body.payload.session_id).toBe('session-1');
       expect(body.payload.event_id).toBe('event-1');
       expect(body.payload.event_name).toBe('PermissionRequest');
@@ -197,7 +197,7 @@ describe('PushService', () => {
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.payload.aps.alert.title).toBe('Permission Request');
-      expect(body.payload.aps.alert.body).toBe('Claude wants to use Edit');
+      expect(body.payload.aps.alert.body).toBe('#s1: Claude wants to use Edit');
     });
 
     it('builds correct notification for Stop', async () => {
@@ -210,7 +210,26 @@ describe('PushService', () => {
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.payload.aps.alert.title).toBe('Stop Request');
-      expect(body.payload.aps.alert.body).toBe('Claude wants to stop');
+      expect(body.payload.aps.alert.body).toBe('#s1: Claude task completed');
+
+      // should include session label in custom payload
+      expect(body.payload.session_short_id).toBe('s1');
+    });
+
+    it('builds Stop notification with sessionName when available', async () => {
+      const payload: PushPayload = {
+        sessionId: 's1',
+        eventId: 'e1',
+        eventName: 'Stop',
+        sessionName: 'My Project',
+      };
+
+      await pushService.sendPush('token', payload);
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.payload.aps.alert.body).toBe('My Project: Claude task completed');
+
+      // test sessionName only in body, not in title
+      expect(body.payload.aps.alert.title).toBe('Stop Request');
     });
 
     it('builds correct notification for Elicitation', async () => {
@@ -223,7 +242,7 @@ describe('PushService', () => {
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.payload.aps.alert.title).toBe('Question');
-      expect(body.payload.aps.alert.body).toBe('Claude has a question');
+      expect(body.payload.aps.alert.body).toBe('#s1: Claude has a question');
     });
 
     it('builds correct notification for AskUserQuestion', async () => {
@@ -237,7 +256,7 @@ describe('PushService', () => {
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.payload.aps.alert.title).toBe('Question');
-      expect(body.payload.aps.alert.body).toBe('Claude has a question');
+      expect(body.payload.aps.alert.body).toBe('#s1: Claude has a question');
     });
 
     it('builds correct notification for ExitPlanMode', async () => {
@@ -251,7 +270,7 @@ describe('PushService', () => {
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.payload.aps.alert.title).toBe('Plan Review');
-      expect(body.payload.aps.alert.body).toBe('Claude wants to exit plan mode');
+      expect(body.payload.aps.alert.body).toBe('#s1: Claude wants to exit plan mode');
     });
 
     it('builds correct notification for unknown event', async () => {
@@ -264,7 +283,7 @@ describe('PushService', () => {
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.payload.aps.alert.title).toBe('MyPilot');
-      expect(body.payload.aps.alert.body).toBe('New interaction event');
+      expect(body.payload.aps.alert.body).toBe('#s1: New interaction event');
     });
 
     it('uses "tool" when toolName is not provided', async () => {
@@ -276,7 +295,7 @@ describe('PushService', () => {
 
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-      expect(body.payload.aps.alert.body).toBe('Claude wants to use tool');
+      expect(body.payload.aps.alert.body).toBe('#s1: Claude wants to use tool');
     });
   });
 
@@ -293,7 +312,7 @@ describe('PushService', () => {
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.payload.aps.alert.title).toBe('权限请求');
-      expect(body.payload.aps.alert.body).toBe('请求使用 Edit');
+      expect(body.payload.aps.alert.body).toBe('#s1: 请求使用 Edit');
     });
 
     it('builds zh-CN notification for Stop', async () => {
@@ -307,7 +326,7 @@ describe('PushService', () => {
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.payload.aps.alert.title).toBe('停止请求');
-      expect(body.payload.aps.alert.body).toBe('Claude 请求停止');
+      expect(body.payload.aps.alert.body).toBe('#s1: Claude 有任务完成');
     });
 
     it('builds zh-CN notification for Elicitation', async () => {
@@ -321,7 +340,7 @@ describe('PushService', () => {
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.payload.aps.alert.title).toBe('问题');
-      expect(body.payload.aps.alert.body).toBe('Claude 有问题');
+      expect(body.payload.aps.alert.body).toBe('#s1: Claude 有问题');
     });
 
     it('builds zh-CN notification for AskUserQuestion', async () => {
@@ -336,7 +355,7 @@ describe('PushService', () => {
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.payload.aps.alert.title).toBe('问题');
-      expect(body.payload.aps.alert.body).toBe('Claude 有问题');
+      expect(body.payload.aps.alert.body).toBe('#s1: Claude 有问题');
     });
 
     it('builds zh-CN notification for ExitPlanMode', async () => {
@@ -351,7 +370,7 @@ describe('PushService', () => {
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.payload.aps.alert.title).toBe('计划审查');
-      expect(body.payload.aps.alert.body).toBe('Claude 请求退出计划模式');
+      expect(body.payload.aps.alert.body).toBe('#s1: Claude 请求退出计划模式');
     });
 
     it('builds zh-CN notification for unknown event', async () => {
@@ -365,7 +384,7 @@ describe('PushService', () => {
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.payload.aps.alert.title).toBe('MyPilot');
-      expect(body.payload.aps.alert.body).toBe('新交互事件');
+      expect(body.payload.aps.alert.body).toBe('#s1: 新交互事件');
     });
   });
 });

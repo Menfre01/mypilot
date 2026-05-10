@@ -70,18 +70,23 @@ export class SessionStore {
     return this.sessions.has(sessionId);
   }
 
-  setDisplayName(sessionId: string, name: string): void {
+  private update(sessionId: string, patch: Partial<SessionInfo>): void {
     const info = this.sessions.get(sessionId);
     if (info) {
-      this.sessions.set(sessionId, { ...info, displayName: name });
+      this.sessions.set(sessionId, { ...info, ...patch });
     }
   }
 
+  setDisplayName(sessionId: string, name: string): void {
+    this.update(sessionId, { displayName: name });
+  }
+
   setSource(sessionId: string, source: SessionSource): void {
-    const info = this.sessions.get(sessionId);
-    if (info) {
-      this.sessions.set(sessionId, { ...info, source });
-    }
+    this.update(sessionId, { source });
+  }
+
+  setCwd(sessionId: string, cwd: string): void {
+    this.update(sessionId, { cwd });
   }
 
   /** 将 session 信息从 oldId 迁移到 newId，保留所有元数据。

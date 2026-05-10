@@ -19,7 +19,7 @@ describe('Hook event classification', () => {
       }
     });
 
-    it('returns false for other events', () => {
+    it('returns false for other events (Stop/SubagentStop are push-only, not interactive)', () => {
       const others: HookEventName[] = [
         'PostToolUse', 'PostToolUseFailure', 'PreToolUse',
         'SessionStart', 'UserPromptSubmit', 'SessionEnd',

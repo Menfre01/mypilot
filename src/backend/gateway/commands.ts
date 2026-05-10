@@ -1,22 +1,27 @@
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import type { CommandItem } from '../../shared/protocol.js';
 
-// 以下 TUI 命令暂不支持（需要在终端渲染 UI）：
-// /rewind, /context, /help, /status, /ide, /cost, /doctor, /terminal-setup
-
 const BUILTIN_COMMANDS: CommandItem[] = [
-  { name: '/new', description: 'Start a new conversation', requiresArgs: false },
-  { name: '/clear', description: 'Clear the current conversation', requiresArgs: false },
-  { name: '/compact', description: 'Compact the context', requiresArgs: false },
-  { name: '/resume', description: 'Resume a previous session', requiresArgs: true },
-  { name: '/simplify', description: 'Simplify and refactor code', requiresArgs: false },
-  { name: '/review', description: 'Review a pull request', requiresArgs: true },
-  { name: '/commit', description: 'Commit staged changes', requiresArgs: false },
-  { name: '/health', description: 'Run code quality check', requiresArgs: false },
-  { name: '/doc', description: 'Generate documentation', requiresArgs: false },
-  { name: '/release-notes', description: 'Generate release notes', requiresArgs: false },
+  // ── 会话管理 ──
+  { name: '/clear', description: 'Start a new conversation with empty context', requiresArgs: false },
+  { name: '/compact', description: 'Free up context by summarizing the conversation', requiresArgs: false },
+  { name: '/rename', description: 'Rename the current session', requiresArgs: true },
+
+  // ── 代码操作 ──
+  { name: '/simplify', description: 'Review recent changes for quality and efficiency', requiresArgs: false },
+  { name: '/review', description: 'Review a pull request locally', requiresArgs: true },
+  { name: '/security-review', description: 'Analyze pending changes for security vulnerabilities', requiresArgs: false },
+
+  // ── 工作流 ──
+  { name: '/plan', description: 'Enter plan mode for a complex task', requiresArgs: false },
+  { name: '/init', description: 'Initialize project with a CLAUDE.md guide', requiresArgs: false },
+  { name: '/btw', description: 'Ask a quick side question without adding to history', requiresArgs: true },
+  { name: '/export', description: 'Export the current conversation as plain text', requiresArgs: true },
+
+  // ── 诊断 ──
+  { name: '/insights', description: 'Generate report analyzing your Claude Code sessions', requiresArgs: false },
 ];
 
 /** 解析 Markdown frontmatter 中的简单 YAML 字段 */
@@ -61,12 +66,10 @@ function parseFrontmatter(content: string): Record<string, string> {
 function scanSkillsDir(skillsDir: string): CommandItem[] {
   const commands: CommandItem[] = [];
   try {
-    if (!existsSync(skillsDir)) return commands;
     const entries = readdirSync(skillsDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const skillFile = join(skillsDir, entry.name, 'SKILL.md');
-      if (!existsSync(skillFile)) continue;
       try {
         const content = readFileSync(skillFile, 'utf8');
         const fm = parseFrontmatter(content);
@@ -94,7 +97,6 @@ function scanPluginSkills(): CommandItem[] {
   const commands: CommandItem[] = [];
   const pluginsBase = join(homedir(), '.claude', 'plugins', 'cache');
   try {
-    if (!existsSync(pluginsBase)) return commands;
     const markets = readdirSync(pluginsBase, { withFileTypes: true });
     for (const market of markets) {
       if (!market.isDirectory()) continue;
@@ -124,7 +126,6 @@ function scanCustomCommands(): CommandItem[] {
   const commands: CommandItem[] = [];
   const commandsDir = join(homedir(), '.claude', 'commands');
   try {
-    if (!existsSync(commandsDir)) return commands;
     const files = readdirSync(commandsDir, { withFileTypes: true });
     for (const file of files) {
       if (!file.isFile() || !file.name.endsWith('.md')) continue;

@@ -164,4 +164,76 @@ describe("SessionStore", () => {
     const store = new SessionStore();
     expect(store.isHidden("ghost")).toBe(false);
   });
+
+  it("setCwd updates cwd on existing session", () => {
+    const store = new SessionStore();
+    store.register("s1");
+    store.setCwd("s1", "/home/user/project");
+
+    const info = store.get("s1");
+    expect(info?.cwd).toBe("/home/user/project");
+  });
+
+  it("setCwd is no-op for non-existent session", () => {
+    const store = new SessionStore();
+    expect(() => store.setCwd("ghost", "/tmp")).not.toThrow();
+    expect(store.get("ghost")).toBeUndefined();
+  });
+
+  it("setCwd preserves other session fields", () => {
+    const store = new SessionStore();
+    const info = store.register("s1");
+    const originalColor = info.color;
+    const originalStartedAt = info.startedAt;
+
+    store.setCwd("s1", "/new/cwd");
+    const updated = store.get("s1");
+    expect(updated?.cwd).toBe("/new/cwd");
+    expect(updated?.color).toBe(originalColor);
+    expect(updated?.startedAt).toBe(originalStartedAt);
+  });
+
+  it("setCwd overwrites previous cwd value", () => {
+    const store = new SessionStore();
+    store.register("s1");
+    store.setCwd("s1", "/first/path");
+    store.setCwd("s1", "/second/path");
+
+    expect(store.get("s1")?.cwd).toBe("/second/path");
+  });
+
+  it("setDisplayName persists correctly", () => {
+    const store = new SessionStore();
+    store.register("s1");
+    store.setDisplayName("s1", "my-session");
+
+    expect(store.get("s1")?.displayName).toBe("my-session");
+  });
+
+  it("setSource persists correctly", () => {
+    const store = new SessionStore();
+    store.register("s1");
+    store.setSource("s1", "mobile");
+
+    expect(store.get("s1")?.source).toBe("mobile");
+  });
+
+  it("updateId migrates all fields including cwd", () => {
+    const store = new SessionStore();
+    store.register("old-id");
+    store.setCwd("old-id", "/some/path");
+    store.setDisplayName("old-id", "test");
+    store.setSource("old-id", "mobile");
+    store.markHidden("old-id");
+
+    store.updateId("old-id", "new-id");
+
+    const info = store.get("new-id");
+    expect(info?.cwd).toBe("/some/path");
+    expect(info?.displayName).toBe("test");
+    expect(info?.source).toBe("mobile");
+    expect(info?.id).toBe("new-id");
+    expect(store.get("old-id")).toBeUndefined();
+    expect(store.isHidden("new-id")).toBe(true);
+  });
 });

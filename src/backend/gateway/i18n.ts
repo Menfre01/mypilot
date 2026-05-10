@@ -19,12 +19,12 @@ export const translations: Record<MessageKey, Record<Locale, string>> = {
   question:            { en: 'Question',                    'zh-CN': '问题' },
   planReview:          { en: 'Plan Review',                 'zh-CN': '计划审查' },
   approvalNeeded:      { en: 'Approval Needed',             'zh-CN': '需要审批' },
-  wantsToUse:          { en: 'Claude wants to use {tool}',  'zh-CN': '请求使用 {tool}' },
-  wantsToStop:         { en: 'Claude wants to stop',        'zh-CN': 'Claude 请求停止' },
-  hasAQuestion:        { en: 'Claude has a question',       'zh-CN': 'Claude 有问题' },
-  wantsToExitPlanMode: { en: 'Claude wants to exit plan mode', 'zh-CN': 'Claude 请求退出计划模式' },
+  wantsToUse:          { en: '{session}: Claude wants to use {tool}',  'zh-CN': '{session}: 请求使用 {tool}' },
+  wantsToStop:         { en: '{session}: Claude task completed', 'zh-CN': '{session}: Claude 有任务完成' },
+  hasAQuestion:        { en: '{session}: Claude has a question',       'zh-CN': '{session}: Claude 有问题' },
+  wantsToExitPlanMode: { en: '{session}: Claude wants to exit plan mode', 'zh-CN': '{session}: Claude 请求退出计划模式' },
   myPilot:             { en: 'MyPilot',                     'zh-CN': 'MyPilot' },
-  newInteractionEvent: { en: 'New interaction event',       'zh-CN': '新交互事件' },
+  newInteractionEvent: { en: '{session}: New interaction event',       'zh-CN': '{session}: 新交互事件' },
 };
 
 export function t(key: MessageKey, locale?: string, params?: Record<string, string>): string {

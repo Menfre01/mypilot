@@ -1,6 +1,7 @@
 import { MessagePipeline } from './message-pipeline.js';
 import { TranscriptTailer } from './transcript-tailer.js';
 import { EventLogger } from './event-logger.js';
+
 import type { WsBus } from './ws-bus.js';
 import type { SessionMessage } from '../../shared/protocol.js';
 import type { TailerStateStore } from './tailer-state-store.js';
