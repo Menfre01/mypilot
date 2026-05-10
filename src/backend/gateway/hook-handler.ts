@@ -184,7 +184,10 @@ export class HookHandler {
       }
 
       if (eventName === 'SessionEnd') {
-        this.deleteSession(sessionId);
+        // PTY 模式下 /new 命令会在同一进程中结束旧会话、开启新会话，
+        // 不能杀进程，否则新会话无法启动。进程退出时 pty.onExit 会自然清理。
+        const isPtySession = this.processManager?.getMode(sessionId) === 'pty';
+        this.deleteSession(sessionId, !isPtySession);
       }
     } finally {
       this._processing = false;
@@ -221,6 +224,16 @@ export class HookHandler {
           const status = this.processManager.getStatus(sessionId);
           if (status?.displayName) {
             this.sessionStore.setDisplayName(sessionId, status.displayName);
+          }
+        } else {
+          // /new 场景：同一进程换了新 session ID，只从软删除记录中对账
+          const cwdResult = this.processManager.reclaimSoftDeleted(resolvedCwd, sessionId);
+          if (cwdResult.found) {
+            reconciledSource = cwdResult.source;
+            const status = this.processManager.getStatus(sessionId);
+            if (status?.displayName) {
+              this.sessionStore.setDisplayName(sessionId, status.displayName);
+            }
           }
         }
       }
@@ -266,14 +279,19 @@ export class HookHandler {
     this.activePushControllers.clear();
   }
 
-  deleteSession(sessionId: string): void {
+  deleteSession(sessionId: string, killProcess = true): void {
     if (!this.sessionStore.has(sessionId)) return;
     this.cancelPushesForSession(sessionId);
     this.broadcastAll({ type: 'session_end', sessionId });
     this.sessionStore.unregister(sessionId);
     this.pendingStore.releaseSession(sessionId);
     this.streamManager?.stopSession(sessionId);
-    this.processManager?.kill(sessionId);
+    if (killProcess) {
+      this.processManager?.kill(sessionId);
+    } else {
+      // PTY /new：进程还在运行，标记软删除等待新 SessionStart 对账
+      this.processManager?.markSoftDeleted(sessionId);
+    }
   }
 
   setMode(mode: GatewayMode, deviceId?: string): void {

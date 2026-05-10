@@ -1,6 +1,7 @@
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Server, IncomingMessage } from 'node:http';
 import type { ClaudeProcessManager } from './claude-process-manager.js';
+import type { SessionStore } from './session-store.js';
 import type { Duplex } from 'node:stream';
 import type { PtyRelayClientMessage } from '../../shared/protocol.js';
 
@@ -14,6 +15,7 @@ export interface PtyRelayServer {
 export function createPtyRelay(
   httpServer: Server,
   processManager: ClaudeProcessManager,
+  sessionStore: SessionStore,
 ): PtyRelayServer {
   const LOCALHOST = '127.0.0.1';
   let wss: WebSocketServer | undefined;
@@ -56,34 +58,6 @@ export function createPtyRelay(
         const cwd = url.searchParams.get('cwd') ?? undefined;
         const model = url.searchParams.get('model') ?? undefined;
 
-        if (isNew) {
-          try {
-            processManager.spawnPTY(sessionIdRef.current, { cwd, model, displayName: name });
-          } catch (err) {
-            ws.send(JSON.stringify({ type: 'pty_error', message: `Failed to spawn session: ${(err as Error).message}` }));
-            ws.close();
-            return;
-          }
-          attachToSession();
-        } else {
-          const existing = processManager.getStatus(sessionIdRef.current);
-          if (!existing) {
-            ws.send(JSON.stringify({ type: 'pty_error', message: `Session ${sessionIdRef.current} not found` }));
-            ws.close();
-            return;
-          }
-          if (existing.mode === 'headless') {
-            processManager.handoff(sessionIdRef.current).then(() => {
-              attachToSession();
-            }).catch((err) => {
-              ws.send(JSON.stringify({ type: 'pty_error', message: `Failed to handoff session: ${err.message}` }));
-              ws.close();
-            });
-            return;
-          }
-          attachToSession();
-        }
-
         function attachToSession(): void {
           const client = {
             send(data: string): void {
@@ -98,8 +72,7 @@ export function createPtyRelay(
 
           const attached = processManager.attachRelay(sessionIdRef.current, client);
           if (!attached) {
-            ws.send(JSON.stringify({ type: 'pty_error', message: 'Session already attached from another terminal. Use --force to take over.' }));
-            ws.close();
+            sendError(ws, 'Session already attached from another terminal.');
             return;
           }
 
@@ -154,6 +127,46 @@ export function createPtyRelay(
           ws.on('error', () => {
             processManager.off('session_ended', onSessionEnded);
           });
+        }
+
+        function sendError(ws: WebSocket, message: string): void {
+          ws.send(JSON.stringify({ type: 'pty_error', message }));
+          ws.close();
+        }
+
+        if (isNew) {
+          try {
+            processManager.spawnPTY(sessionIdRef.current, { cwd, model, displayName: name });
+          } catch (err) {
+            sendError(ws, `Failed to spawn session: ${(err as Error).message}`);
+            return;
+          }
+          attachToSession();
+        } else {
+          // 支持短 ID 前缀匹配
+          const resolved = processManager.findSessionId(resolvedSessionId);
+          if (!resolved) {
+            sendError(ws, `Session ${resolvedSessionId} not found`);
+            return;
+          }
+          sessionIdRef.current = resolved;
+
+          const existing = processManager.getStatus(sessionIdRef.current);
+          if (!existing) {
+            sendError(ws, `Session ${resolvedSessionId} not found`);
+            return;
+          }
+          // 桌面终端接管时更新 source
+          sessionStore.setSource(sessionIdRef.current, 'desktop');
+          if (existing.mode === 'headless') {
+            processManager.handoff(sessionIdRef.current).then(() => {
+              attachToSession();
+            }).catch((err) => {
+              sendError(ws, `Failed to handoff session: ${err.message}`);
+            });
+            return;
+          }
+          attachToSession();
         }
       }
 

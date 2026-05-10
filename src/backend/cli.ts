@@ -16,6 +16,7 @@ import { loadLinksConfig, saveLinksConfig } from "./gateway/link-config.js";
 import { loadPushConfig, savePushConfig, deletePushConfig, generateGatewayId, autoRegisterPush, getUserInfo, DEFAULT_RELAY_URL } from "./gateway/push-config.js";
 import { VALID_LINK_TYPES, type LinkType, type PtyRelayServerMessage } from "../shared/protocol.js";
 import { WebSocket } from "ws";
+import { encrypt } from "./gateway/crypto.js";
 
 export const PID_DIR = join(homedir(), ".mypilot");
 export const PID_PATH = join(PID_DIR, "gateway.pid");
@@ -126,7 +127,10 @@ function checkExistingGateway(port: number, key: Buffer): Promise<boolean> {
 }
 
 function printUsage(): void {
-  console.log("Usage: mypilot <command>");
+  console.log("Usage: mypilot <command> [options]");
+  console.log("");
+  console.log("Options:");
+  console.log("  --help, -h    Show this help message");
   console.log("");
   console.log("Commands:");
   console.log("  start       Start Gateway in background");
@@ -136,14 +140,12 @@ function printUsage(): void {
   console.log("  status      Check Gateway status");
   console.log("  pair-info   Show pairing info (IP + QR code)");
   console.log("  init-hooks  Configure Claude Code hooks");
-  console.log("  session     Create or attach to a Claude Code session");
+  console.log("  session     Create or resume a Claude Code session");
   console.log("              session [--name <name>] [--cwd <path>] [--model <model>]");
   console.log("              session --resume <name-or-id>");
-  console.log("              session --last");
-  console.log("              session --attach <name-or-id> [--force]");
-  console.log("              session --list");
-  console.log("              session --kill <name-or-id>");
-  console.log("              session --detach");
+  console.log("              session --continue");
+  console.log("              session kill <name-or-id>");
+  console.log("              session ls [-w|--watch]");
   console.log("  link        Manage communication links");
   console.log("              link list");
   console.log("              link add <lan|tunnel> <url> [--label <label>]");
@@ -632,26 +634,90 @@ async function handlePushCommand(pidDir: string, args: string[]): Promise<void> 
   process.exit(1);
 }
 
-async function handleSessionCommand(pidDir: string, args: string[]): Promise<void> {
+function printSessionUsage(): void {
+  console.log("Usage: mypilot session [options]");
+  console.log("");
+  console.log("Create, resume, or manage Claude Code sessions.");
+  console.log("");
+  console.log("Options:");
+  console.log("  --help, -h          Show this help message");
+  console.log("  --name <name>       Set display name for new session");
+  console.log("  --cwd <path>        Set working directory (default: current directory)");
+  console.log("  --model <model>     Set model for new session");
+  console.log("  --resume <id>       Resume an existing session by name or ID prefix");
+  console.log("  --continue          Resume the most recent session");
+  console.log("");
+  console.log("Commands:");
+  console.log("  kill <id>           Kill a session");
+  console.log("  ls [-w|--watch]     List all active sessions");
+  console.log("");
+  console.log("Examples:");
+  console.log("  mypilot session                        Create a new session");
+  console.log("  mypilot session --name my-project      Create a named session");
+  console.log("  mypilot session --continue             Resume the most recent session");
+  console.log("  mypilot session --resume abc123        Resume session abc123");
+  console.log("  mypilot session kill abc123            Kill a session");
+  console.log("  mypilot session ls                     List all sessions");
+  console.log("  mypilot session ls -w                  Watch sessions live");
+}
+
+async function requireGateway(pidDir: string): Promise<Buffer> {
   const key = getOrCreateKeySafe(pidDir);
   if (!key) {
     console.error("Gateway has not been started yet. Run 'mypilot gateway' first.");
     process.exit(1);
   }
-
   const isExisting = await checkExistingGateway(DEFAULT_PORT, key);
   if (!isExisting) {
     console.error(`Gateway is not running or not responding correctly on port ${DEFAULT_PORT}. Check gateway status.`);
     process.exit(1);
   }
+  return key;
+}
 
-  type SessionAction = 'new' | 'resume' | 'attach' | 'list' | 'kill' | 'detach' | 'last';
+async function handleSessionCommand(pidDir: string, args: string[]): Promise<void> {
+  if (args.length >= 1) {
+    const subcommand = args[0]!;
+
+    if (subcommand === '--help' || subcommand === '-h') {
+      printSessionUsage();
+      process.exit(0);
+    }
+
+    if (subcommand === 'ls') {
+      if (args.includes('--help') || args.includes('-h')) {
+        printSessionUsage();
+        process.exit(0);
+      }
+      const key = await requireGateway(pidDir);
+      const watch = args.includes('-w') || args.includes('--watch');
+      if (watch) {
+        await watchSessionList(DEFAULT_PORT, key);
+      } else {
+        await printSessionList(DEFAULT_PORT, key);
+      }
+      return;
+    }
+
+    if (subcommand === 'kill') {
+      if (!args[1]) {
+        console.error("Usage: mypilot session kill <name-or-id>");
+        process.exit(1);
+      }
+      const key = await requireGateway(pidDir);
+      await killSession(DEFAULT_PORT, key, args[1]);
+      return;
+    }
+  }
+
+  const key = await requireGateway(pidDir);
+
+  type SessionAction = 'new' | 'resume' | 'continue';
   let action: SessionAction = 'new';
   let sessionTarget: string | undefined;
   let sessionName: string | undefined;
   let sessionCwd: string | undefined;
   let sessionModel: string | undefined;
-  let forceAttach = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -669,29 +735,12 @@ async function handleSessionCommand(pidDir: string, args: string[]): Promise<voi
         action = 'resume';
         sessionTarget = args[++i];
         break;
-      case '--last':
-        action = 'last';
-        break;
-      case '--attach':
-        action = 'attach';
-        sessionTarget = args[++i];
-        break;
-      case '--list':
-        action = 'list';
-        break;
-      case '--kill':
-        action = 'kill';
-        sessionTarget = args[++i];
-        break;
-      case '--detach':
-        action = 'detach';
-        break;
-      case '--force':
-        forceAttach = true;
+      case '--continue':
+        action = 'continue';
         break;
       default:
         if (!arg.startsWith('--')) {
-          // Positional argument: treat as resume target
+          // 位置参数：当作 resume target
           action = 'resume';
           sessionTarget = arg;
         }
@@ -699,70 +748,10 @@ async function handleSessionCommand(pidDir: string, args: string[]): Promise<voi
     }
   }
 
-  if (action === 'list') {
-    const sessions = await fetchSessionList(DEFAULT_PORT, key);
-    if (!sessions || sessions.length === 0) {
-      console.log("No active sessions.");
-      return;
-    }
-    console.log("ID                                    名称           模式       来源");
-    console.log("─".repeat(80));
-    for (const s of sessions) {
-      const id = s.sessionId.slice(0, 8);
-      const name = s.displayName ?? '-';
-      const mode = s.mode === 'pty' ? 'PTY' : 'headless';
-      const source = s.source ?? '-';
-      console.log(`${id.padEnd(12)} ${name.slice(0, 12).padEnd(12)} ${mode.padEnd(8)} ${source}`);
-    }
-    return;
-  }
-
-  if (action === 'kill') {
-    if (!sessionTarget) {
-      console.error("Usage: mypilot session --kill <name-or-id>");
-      process.exit(1);
-    }
-    const sessions = await fetchSessionList(DEFAULT_PORT, key);
-    if (!sessions || sessions.length === 0) {
-      console.error("Error: no active sessions.");
-      process.exit(1);
-    }
-    let fullId: string | null = null;
-    const prefixMatches: string[] = [];
-    for (const s of sessions) {
-      if (s.sessionId === sessionTarget) {
-        fullId = s.sessionId;
-        break;
-      }
-      if (s.sessionId.startsWith(sessionTarget)) {
-        prefixMatches.push(s.sessionId);
-      }
-      if (s.displayName === sessionTarget) {
-        fullId = s.sessionId;
-        break;
-      }
-    }
-    if (!fullId && prefixMatches.length === 1) {
-      fullId = prefixMatches[0];
-    }
-    if (!fullId) {
-      console.error("Error: session '%s' not found.", sessionTarget);
-      process.exit(1);
-    }
-    await sendKillCommand(DEFAULT_PORT, key, fullId);
-    console.log("Session %s killed.", sessionTarget);
-    return;
-  }
-
-  if (action === 'detach') {
-    console.log("Detach from current session. Use Ctrl+C to detach without killing the session.");
-    return;
-  }
-
   const params = new URLSearchParams();
   if (action === 'new') {
     params.set('sessionId', 'new');
-  } else if (action === 'last') {
+  } else if (action === 'continue') {
     params.set('sessionId', 'last');
   } else {
     params.set('sessionId', sessionTarget ?? 'new');
@@ -770,11 +759,135 @@ async function handleSessionCommand(pidDir: string, args: string[]): Promise<voi
   if (sessionName) params.set('name', sessionName);
   params.set('cwd', sessionCwd ?? process.cwd());
   if (sessionModel) params.set('model', sessionModel);
-  if (forceAttach) params.set('force', '1');
 
   const relayUrl = `ws://127.0.0.1:${DEFAULT_PORT}/pty-relay?${params.toString()}`;
-
   await runPtyRelayClient(relayUrl);
+}
+
+function formatSessionTable(sessions: SessionListEntry[]): string {
+  const lines: string[] = [];
+  lines.push("ID             名称           模式       来源");
+  lines.push("─".repeat(80));
+  for (const s of sessions) {
+    const id = s.sessionId.slice(0, 8);
+    const name = (s.displayName ?? '-').slice(0, 12);
+    const mode = s.mode === 'pty' ? 'PTY' : 'headless';
+    const source = s.source ?? '-';
+    lines.push(`${id.padEnd(14)} ${name.padEnd(12)} ${mode.padEnd(8)} ${source}`);
+  }
+  return lines.join("\n");
+}
+
+async function printSessionList(port: number, key: Buffer): Promise<void> {
+  const sessions = await fetchSessionList(port, key);
+  if (!sessions || sessions.length === 0) {
+    console.log("No active sessions.");
+    return;
+  }
+  console.log(formatSessionTable(sessions));
+}
+
+async function watchSessionList(port: number, key: Buffer): Promise<void> {
+  const { stdout, stdin } = process;
+
+  if (stdin.isTTY && stdin.isRaw) {
+    stdin.setRawMode(false);
+  }
+
+  let tick = 0;
+  let rendering = false;
+  let lastData = '';
+
+  const render = async () => {
+    let sessions;
+    try {
+      sessions = await fetchSessionList(port, key);
+    } catch {
+      lastData = '';
+      stdout.write("\x1b[2J\x1b[H");
+      stdout.write(`Sessions (Ctrl+C to exit, refresh #${++tick})\n\n`);
+      stdout.write("Failed to fetch sessions.\n");
+      return;
+    }
+    const formatted = !sessions || sessions.length === 0
+      ? "No active sessions.\n"
+      : formatSessionTable(sessions) + "\n";
+    if (formatted === lastData) return;
+    lastData = formatted;
+    stdout.write("\x1b[2J\x1b[H");
+    stdout.write(`Sessions (Ctrl+C to exit, refresh #${++tick})\n\n`);
+    stdout.write(formatted);
+  };
+
+  let timeout: NodeJS.Timeout;
+  let stopped = false;
+
+  const poll = async () => {
+    if (stopped) return;
+    if (!rendering) {
+      rendering = true;
+      try {
+        await render();
+      } finally {
+        rendering = false;
+      }
+    }
+    timeout = setTimeout(poll, 5000);
+  };
+
+  await poll();
+
+  await new Promise<void>((resolve) => {
+    const cleanup = () => {
+      stopped = true;
+      clearTimeout(timeout);
+      process.removeListener('SIGINT', cleanup);
+      process.removeListener('SIGTERM', cleanup);
+      if (stdin.isTTY && stdin.isRaw) {
+        stdin.setRawMode(false);
+      }
+      stdout.write("\n");
+      resolve();
+    };
+
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+  });
+}
+
+async function killSession(port: number, key: Buffer, target: string): Promise<void> {
+  const sessions = await fetchSessionList(port, key);
+  if (!sessions || sessions.length === 0) {
+    console.error("Error: no active sessions.");
+    process.exit(1);
+  }
+  let fullId: string | null = null;
+  const prefixMatches: string[] = [];
+  let nameMatch: string | undefined;
+  for (const s of sessions) {
+    if (s.sessionId === target) {
+      fullId = s.sessionId;
+      break;
+    }
+    if (s.sessionId.startsWith(target)) {
+      prefixMatches.push(s.sessionId);
+    }
+    if (s.displayName === target) {
+      nameMatch = s.sessionId;
+    }
+  }
+  if (!fullId && prefixMatches.length === 1) {
+    fullId = prefixMatches[0];
+  }
+  if (!fullId && nameMatch) {
+    fullId = nameMatch;
+  }
+  if (!fullId) {
+    console.error("Error: session '%s' not found.", target);
+    process.exit(1);
+  }
+  await sendKillCommand(port, key, fullId);
+  console.log("Session %s killed.", target);
 }
 
 interface SessionListEntry {
@@ -807,7 +920,6 @@ async function fetchSessionList(port: number, key: Buffer): Promise<SessionListE
 }
 
 async function sendKillCommand(port: number, key: Buffer, sessionId: string): Promise<void> {
-  // Connect via encrypted WebSocket to send stop_session
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws-gateway?key=${encodeURIComponent(key.toString('base64'))}`);
     const timer = setTimeout(() => {
@@ -816,7 +928,7 @@ async function sendKillCommand(port: number, key: Buffer, sessionId: string): Pr
     }, 5000);
 
     ws.on('open', () => {
-      ws.send(JSON.stringify({ type: 'stop_session', sessionId }));
+      ws.send(encrypt(key, JSON.stringify({ type: 'stop_session', sessionId })));
       clearTimeout(timer);
       ws.close();
       resolve();
@@ -969,9 +1081,9 @@ export async function runCli(
 ): Promise<void> {
   const command = argv[2];
 
-  if (!command) {
+  if (!command || command === '--help' || command === '-h') {
     printUsage();
-    process.exit(1);
+    process.exit(command ? 0 : 1);
   }
 
   switch (command) {

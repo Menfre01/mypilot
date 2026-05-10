@@ -62,6 +62,12 @@ export class ClaudeProcessManager extends EventEmitter {
    *  PTY 和 headless 模式都参与对账，以便 HookHandler 统一处理。 */
   private pendingReconciliation = new Map<string, { cwd: string; createdAt: number; source: SessionSource }>();
 
+  /** 软删除的 session：SessionEnd 时进程还在运行（如 /new），保留进程记录等待新 SessionStart 对账。
+   *  oldSessionId → { cwd, deletedAt }
+   *  超过 SOFT_DELETE_TTL_MS 未被认领的条目会被 evict，防止因 cwd 不匹配造成的泄漏。 */
+  private softDeletedSessions = new Map<string, { cwd: string; deletedAt: number }>();
+  private static readonly SOFT_DELETE_TTL_MS = 5 * 60 * 1000;
+
   /** 创建一个可在对账时自动更新的可变 session ID 引用 */
   createSessionIdRef(sessionId: string): { current: string } {
     const ref = { current: sessionId };
@@ -69,20 +75,82 @@ export class ClaudeProcessManager extends EventEmitter {
     return ref;
   }
 
-  /** 查找待对账的 session（按 cwd 匹配，取最近创建的），
-   *  并将其从 initialId 迁移到 Claude 的真实 session ID。 */
-  reconcilePtySession(hookCwd: string): { id: string; source: SessionSource } | undefined {
-    let best: { id: string; source: SessionSource; createdAt: number } | undefined;
-    for (const [id, info] of this.pendingReconciliation) {
-      if (info.cwd === hookCwd) {
-        if (!best || info.createdAt > best.createdAt) {
-          best = { id, source: info.source, createdAt: info.createdAt };
+  /** 标记 session 为软删除：SessionEnd 时进程还在运行（/new），保留进程记录但标记为待迁移。
+   *  后续 SessionStart 通过 reclaimSoftDeleted 精确匹配。 */
+  markSoftDeleted(sessionId: string): void {
+    const record = this.processes.get(sessionId);
+    if (!record) return;
+    this.evictStaleSoftDeleted();
+    this.softDeletedSessions.set(sessionId, { cwd: record.cwd, deletedAt: Date.now() });
+  }
+
+  /** 清理超过 TTL 且未被认领的软删除记录 */
+  private evictStaleSoftDeleted(): void {
+    const cutoff = Date.now() - ClaudeProcessManager.SOFT_DELETE_TTL_MS;
+    for (const [id, info] of this.softDeletedSessions) {
+      if (info.deletedAt < cutoff) {
+        this.softDeletedSessions.delete(id);
+      }
+    }
+  }
+
+  /** 从 Map 中按 cwd 匹配，取时间最大的条目，删除并返回。 */
+  private popBestCwdMatch<T extends { cwd: string }>(
+    map: Map<string, T>,
+    cwd: string,
+    getTime: (entry: T) => number,
+  ): { id: string; entry: T } | undefined {
+    let bestId: string | undefined;
+    let bestEntry: T | undefined;
+    let bestTime = -Infinity;
+    for (const [id, entry] of map) {
+      if (entry.cwd === cwd) {
+        const time = getTime(entry);
+        if (time > bestTime) {
+          bestId = id;
+          bestEntry = entry;
+          bestTime = time;
         }
       }
     }
+    if (bestId && bestEntry) {
+      map.delete(bestId);
+      return { id: bestId, entry: bestEntry };
+    }
+    return undefined;
+  }
+
+  /** /new 对账：从软删除记录中按 cwd 匹配，取最近删除的，将进程迁移到新 session ID。 */
+  reclaimSoftDeleted(cwd: string, newSessionId: string): { found: boolean; source: SessionSource } {
+    this.evictStaleSoftDeleted();
+    const best = this.popBestCwdMatch(this.softDeletedSessions, cwd, e => e.deletedAt);
     if (best) {
-      this.pendingReconciliation.delete(best.id);
-      return { id: best.id, source: best.source };
+      const record = this.processes.get(best.id);
+      if (record) {
+        const source = record.spawnOptions.source ?? 'desktop';
+        this.processes.delete(best.id);
+        record.sessionId = newSessionId;
+        this.processes.set(newSessionId, record);
+
+        const ref = this.sessionRefs.get(best.id);
+        if (ref) {
+          ref.current = newSessionId;
+          this.sessionRefs.delete(best.id);
+          this.sessionRefs.set(newSessionId, ref);
+        }
+
+        return { found: true, source };
+      }
+    }
+    return { found: false, source: 'desktop' };
+  }
+
+  /** 查找待对账的 session（按 cwd 匹配，取最近创建的），
+   *  并将其从 initialId 迁移到 Claude 的真实 session ID。 */
+  reconcilePtySession(hookCwd: string): { id: string; source: SessionSource } | undefined {
+    const best = this.popBestCwdMatch(this.pendingReconciliation, hookCwd, e => e.createdAt);
+    if (best) {
+      return { id: best.id, source: best.entry.source };
     }
     return undefined;
   }
@@ -153,7 +221,6 @@ export class ClaudeProcessManager extends EventEmitter {
         }
         this.tryParseStreamJson(data, record.messageHandlers);
       } catch {
-        // PTY data callback threw — don't crash
       }
     });
 
@@ -232,7 +299,6 @@ export class ClaudeProcessManager extends EventEmitter {
           }
         }
       } catch {
-        // Stream callback threw — don't crash
       }
     });
 
@@ -401,7 +467,6 @@ export class ClaudeProcessManager extends EventEmitter {
     const record = this.processes.get(sessionId);
     if (!record || record.mode !== 'headless') return;
 
-    // Stop headless, respawn as PTY with --resume
     await this.stop(sessionId);
     this.spawnPTY(sessionId, {
       ...record.spawnOptions,
@@ -469,6 +534,7 @@ export class ClaudeProcessManager extends EventEmitter {
     this.processes.delete(sessionId);
     this.sessionRefs.delete(sessionId);
     this.pendingReconciliation.delete(sessionId);
+    this.softDeletedSessions.delete(sessionId);
   }
 
   private buildClaudeArgs(options: SpawnOptions, mode: SessionMode): string[] {
@@ -512,7 +578,6 @@ export class ClaudeProcessManager extends EventEmitter {
   }
 
   private tryParseStreamJson(data: string, handlers: Set<StreamJsonHandler>): void {
-    // Only attempt parsing if there are registered message handlers
     if (handlers.size === 0) return;
 
     // In PTY mode, output is mixed with TUI escape sequences.
@@ -521,10 +586,9 @@ export class ClaudeProcessManager extends EventEmitter {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      // Quick check: must start with { and contain "type"
       if (!trimmed.startsWith('{') || !trimmed.includes('"type"')) continue;
       try {
-        JSON.parse(trimmed); // Validate it's parseable JSON
+        JSON.parse(trimmed);
         for (const handler of handlers) {
           try { handler(trimmed); } catch { /* ignore */ }
         }

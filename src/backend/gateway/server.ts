@@ -46,6 +46,10 @@ export function createServer(
   const tokenStatsStore = new TokenStatsStore(pidDir);
   const tailerStateStore = new TailerStateStore(pidDir);
 
+  const CTRL_C = '\x03';
+  // 追踪被 ESC 中断过的 session，用于 send_prompt 时决定是否需要 CTRL_C 清除残留输入
+  const interruptedSessions = new Set<string>();
+
   const keyB64 = key.toString('base64');
   const MAX_RECENT_EVENTS = 500;
 
@@ -344,19 +348,27 @@ export function createServer(
           processManager.write(message.sessionId, userMsg + '\n');
         } else {
           // PTY raw 模式下 Enter 键是 \r，写 \n 只会换行不提交
-          // 分两次 write：先写 prompt 文本，再单独写 \r
-          // 长 prompt 一次写入时 \r 可能在 node-pty 分块写入间隙丢失，
-          // 导致终端不会自动回车，输入挂起直到下一个 prompt 到达
           const promptText = message.prompt.replace(/\n$/, '');
+          // 斜杠命令（/new、/simplify 等）需要在命令模式下执行，
+          // \x03 (Ctrl+C) 确保 Claude Code 回到顶层提示符而非聊天输入区
+          if (interruptedSessions.has(message.sessionId)) {
+            interruptedSessions.delete(message.sessionId);
+            processManager.write(message.sessionId, CTRL_C);
+          } else if (promptText.startsWith('/')) {
+            processManager.write(message.sessionId, CTRL_C);
+          }
           if (promptText.length > 0) {
             processManager.write(message.sessionId, promptText);
           }
+          // 分两次 write：长 prompt 一次写入时 \r 可能在 node-pty 分块写入间隙丢失，
+          // 导致终端不会自动回车，输入挂起直到下一个 prompt 到达
           processManager.write(message.sessionId, '\r');
         }
         break;
       }
       case 'interrupt_session':
         processManager.interrupt(message.sessionId);
+        interruptedSessions.add(message.sessionId);
         break;
       case 'subscribe_session':
         void sessionStreamManager.replayHistory(
@@ -364,6 +376,7 @@ export function createServer(
         );
         break;
       case 'delete_session':
+        interruptedSessions.delete(message.sessionId);
         hookHandler.deleteSession(message.sessionId);
         break;
       case 'register_device':
@@ -419,7 +432,7 @@ export function createServer(
       httpServer = createHttpServer();
       httpServer.on('request', handleRequest);
 
-      ptyRelay = createPtyRelay(httpServer, processManager);
+      ptyRelay = createPtyRelay(httpServer, processManager, sessionStore);
       ptyRelay.start();
       wsBus.attach(httpServer);
 
@@ -431,6 +444,7 @@ export function createServer(
 
       // ProcessManager → SessionStore 同步：进程退出/被杀时同步清理
       processManager.on('session_ended', (sessionId: string) => {
+        interruptedSessions.delete(sessionId);
         if (sessionStore.has(sessionId)) {
           hookHandler.deleteSession(sessionId);
         }
