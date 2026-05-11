@@ -10,6 +10,10 @@ import {
   isUserInteractionEvent,
   isInteractivePreToolUse,
 } from '../../shared/events.js';
+import {
+  makeSessionActivity,
+  makeSessionIdle,
+} from '../../shared/protocol.js';
 import type {
   GatewayMode,
   InteractionResponse,
@@ -174,6 +178,15 @@ export class HookHandler {
         this.streamManager?.holdInteractive(sessionMsg);
       } else {
         this.streamManager?.push(sessionMsg);
+      }
+
+      // 填补 prompt 提交到 LLM 响应之间的静默期
+      if (eventName === 'UserPromptSubmit') {
+        this.broadcastAll(makeSessionActivity(sessionId, hookEvent.prompt as string | undefined));
+      }
+
+      if (isStopEvent) {
+        this.broadcastAll(makeSessionIdle(sessionId));
       }
 
       if (transcriptPath) {

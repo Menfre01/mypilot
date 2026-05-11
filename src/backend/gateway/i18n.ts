@@ -15,12 +15,12 @@ export type MessageKey =
 
 export const translations: Record<MessageKey, Record<Locale, string>> = {
   permissionRequest:   { en: 'Permission Request',          'zh-CN': '权限请求' },
-  stopRequest:         { en: 'Stop Request',                'zh-CN': '停止请求' },
+  stopRequest:         { en: 'Claude Stop',                 'zh-CN': 'Claude 停止' },
   question:            { en: 'Question',                    'zh-CN': '问题' },
   planReview:          { en: 'Plan Review',                 'zh-CN': '计划审查' },
   approvalNeeded:      { en: 'Approval Needed',             'zh-CN': '需要审批' },
   wantsToUse:          { en: '{session}: Claude wants to use {tool}',  'zh-CN': '{session}: 请求使用 {tool}' },
-  wantsToStop:         { en: '{session}: Claude task completed', 'zh-CN': '{session}: Claude 有任务完成' },
+  wantsToStop:         { en: '{session} task completed',        'zh-CN': '{session} 任务完成' },
   hasAQuestion:        { en: '{session}: Claude has a question',       'zh-CN': '{session}: Claude 有问题' },
   wantsToExitPlanMode: { en: '{session}: Claude wants to exit plan mode', 'zh-CN': '{session}: Claude 请求退出计划模式' },
   myPilot:             { en: 'MyPilot',                     'zh-CN': 'MyPilot' },

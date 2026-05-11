@@ -158,6 +158,26 @@ export interface SessionMessage {
 
 export type GatewayMode = 'bystander' | 'takeover';
 
+// ── Session activity ──
+
+export type SessionActivityStatus = 'idle' | 'processing';
+
+export interface SessionActivity {
+  type: 'session_activity';
+  sessionId: string;
+  status: SessionActivityStatus;
+  prompt?: string;
+  timestamp: number;
+}
+
+export function makeSessionActivity(sessionId: string, prompt?: string): SessionActivity {
+  return { type: 'session_activity', sessionId, status: 'processing', prompt, timestamp: Date.now() };
+}
+
+export function makeSessionIdle(sessionId: string): SessionActivity {
+  return { type: 'session_activity', sessionId, status: 'idle', timestamp: Date.now() };
+}
+
 // ── WebSocket protocol: Gateway -> Frontend ──
 
 export interface PendingInteraction {
@@ -213,7 +233,8 @@ export type GatewayMessage =
   | { type: 'directories_list'; items: DirectoryItem[] }
   | { type: 'validate_path_result'; path: string; ok: boolean; error?: string }
   | { type: 'rewind_selector'; interactionId: string; sessionId: string; turns: RewindTurn[] }
-  | { type: 'commands_list'; commands: CommandItem[] };
+  | { type: 'commands_list'; commands: CommandItem[] }
+  | SessionActivity;
 
 // ── WebSocket protocol: Frontend -> Gateway ──
 

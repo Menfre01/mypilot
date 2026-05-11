@@ -209,8 +209,8 @@ describe('PushService', () => {
 
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-      expect(body.payload.aps.alert.title).toBe('Stop Request');
-      expect(body.payload.aps.alert.body).toBe('#s1: Claude task completed');
+      expect(body.payload.aps.alert.title).toBe('Claude Stop');
+      expect(body.payload.aps.alert.body).toBe('#s1 task completed');
 
       // should include session label in custom payload
       expect(body.payload.session_short_id).toBe('s1');
@@ -226,10 +226,10 @@ describe('PushService', () => {
 
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-      expect(body.payload.aps.alert.body).toBe('My Project: Claude task completed');
+      expect(body.payload.aps.alert.body).toBe('My Project task completed');
 
       // test sessionName only in body, not in title
-      expect(body.payload.aps.alert.title).toBe('Stop Request');
+      expect(body.payload.aps.alert.title).toBe('Claude Stop');
     });
 
     it('builds correct notification for Elicitation', async () => {
@@ -325,8 +325,8 @@ describe('PushService', () => {
 
       await pushService.sendPush('token', payload);
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-      expect(body.payload.aps.alert.title).toBe('停止请求');
-      expect(body.payload.aps.alert.body).toBe('#s1: Claude 有任务完成');
+      expect(body.payload.aps.alert.title).toBe('Claude 停止');
+      expect(body.payload.aps.alert.body).toBe('#s1 任务完成');
     });
 
     it('builds zh-CN notification for Elicitation', async () => {
