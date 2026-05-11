@@ -509,9 +509,10 @@ export class ClaudeProcessManager extends EventEmitter {
     return Array.from(this.processes.values()).map(r => this.getStatus(r.sessionId)!);
   }
 
-  getMostRecentSession(): SessionStatus | undefined {
+  getMostRecentSession(source?: SessionSource): SessionStatus | undefined {
     let best: ProcessRecord | undefined;
     for (const record of this.processes.values()) {
+      if (source && record.spawnOptions.source !== source) continue;
       if (!best || record.lastActivityAt > best.lastActivityAt) {
         best = record;
       }

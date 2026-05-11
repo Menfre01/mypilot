@@ -14,7 +14,12 @@
   - [block: text](#block-text)
   - [block: tool_use](#block-tool_use)
   - [block: tool_result](#block-tool_result)
+  - [block: command_meta](#block-command_meta)
   - [组合示例](#组合示例)
+- [Rewind 选择器消息](#rewind-选择器消息)
+  - [rewind_selector](#rewind_selector)
+- [命令列表消息](#命令列表消息)
+  - [commands_list](#commands_list)
 - [SSEHookEvent — 交互与通知事件](#ssehookevent--交互与通知事件)
   - [SessionStart / SessionEnd](#sessionstart--sessionend)
   - [Stop / SubagentStop / StopFailure](#stop--subagentstop--stopfailure)
@@ -39,7 +44,7 @@
 
 ## WebSocket 消息信封
 
-客户端通过 WebSocket 接收 `GatewayMessage`，与 MessageFlow 相关的有两种：
+客户端通过 WebSocket 接收 `GatewayMessage`，与 MessageFlow 相关的有四种：
 
 ```json
 // 1. Hook 事件（交互/通知）
@@ -59,9 +64,33 @@
 }
 ```
 
+```json
+// 3. Rewind 选择器（分步回退）
+{
+  "type": "rewind_selector",
+  "interactionId": "base36_id",
+  "sessionId": "466561cc-8041-4ff8-8a89-50b321426e8f",
+  "turns": [
+    { "index": 0, "role": "User", "summary": "帮我分析这个文件的性能问题" },
+    { "index": 1, "role": "Assistant", "summary": "首先读取文件内容..." }
+  ]
+}
+
+// 4. 可用命令列表
+{
+  "type": "commands_list",
+  "commands": [
+    { "name": "/rewind", "description": "恢复到之前的对话位置", "requiresArgs": true },
+    { "name": "/compact", "description": "压缩上下文", "requiresArgs": false }
+  ]
+}
+```
+
 **关键区分**：
 - `event`：状态变更通知（session 启停、权限请求、错误等），text 类消息不在此通道
 - `transcript_entry`：CC 的完整行为过程（思考 → 文本回复 → 工具调用 → 工具结果），用户阅读的主体
+- `rewind_selector`：服务端向客户端发送可回退轮次列表，客户端渲染为交互式选择器
+- `commands_list`：服务端向客户端推送当前可用的 slash 命令列表
 
 ---
 
@@ -85,6 +114,9 @@ TranscriptEntry 来自 CC transcript JSONL 文件的增量解析，包含 assist
   },
   "blocks": [
     /* TranscriptBlock[] — 见下方各节 */
+  ],
+  "commandMeta": [
+    /* CommandMetaItem[] — 仅 user 条目，见下方 */
   ]
 }
 ```
@@ -97,6 +129,7 @@ TranscriptEntry 来自 CC transcript JSONL 文件的增量解析，包含 assist
 | `model` | string? | 仅 `assistant` 条目有值，如 `"claude-opus-4-7"`、`"deepseek-v4-pro"` |
 | `usage` | TokenUsage? | 仅 `assistant` 条目有值，token 消耗统计 |
 | `blocks` | TranscriptBlock[] | 内容块数组，按顺序排列 |
+| `commandMeta` | CommandMetaItem[]? | 仅 `user` 条目可能出现，从 local command XML 标签中解析的元信息 |
 
 ### TokenUsage
 
@@ -271,6 +304,112 @@ user 条目中的工具执行结果。内容截断至 1000 字符。
   ]
 }
 ```
+
+### block: command_meta
+
+user 条目中的 local command XML 元信息。仅当 CC 执行 local command（如 `/rewind`、`/compact` 等斜杠命令）时出现。
+
+```json
+// 作为 TranscriptEntry.commandMeta 字段出现
+[
+  { "type": "command_name", "content": "compact" },
+  { "type": "command_message", "content": "清理上下文，保持对话专注" },
+  { "type": "command_args", "content": "" },
+  { "type": "stdout", "content": "Context compacted: 150 messages removed." }
+]
+```
+
+**CommandMetaItem 字段**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `type` | string | 元信息类型，见下方枚举 |
+| `content` | string | 元信息内容文本 |
+
+**type 枚举值**：
+
+| 值 | 说明 |
+|---|------|
+| `"command_name"` | 命令名，如 `"compact"`、`"rewind"` |
+| `"command_message"` | 命令说明文字 |
+| `"command_args"` | 命令参数 |
+| `"stdout"` | 命令标准输出 |
+| `"stderr"` | 命令标准错误 |
+| `"caveat"` | 命令警告信息 |
+| `"system_reminder"` | 系统级提示（如 `<system-reminder>` 标签内容） |
+
+---
+
+## Rewind 选择器消息
+
+### rewind_selector
+
+**发送时机**：用户发送 `/rewind` 命令后，服务端解析 transcript 生成可回退轮次列表，推送给客户端。
+
+```json
+{
+  "type": "rewind_selector",
+  "interactionId": "g3a",
+  "sessionId": "466561cc-8041-4ff8-8a89-50b321426e8f",
+  "turns": [
+    { "index": 0, "role": "User", "summary": "帮我分析 src/backend/gateway/commands.ts" },
+    { "index": 1, "role": "Assistant", "summary": "首先读取文件内容..." },
+    { "index": 2, "role": "User", "summary": "继续优化" },
+    { "index": 3, "role": "Assistant", "summary": "根据你的反馈，调整了错误处理..." }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `interactionId` | string | 交互 ID，客户端响应时回传 |
+| `sessionId` | string | 关联的 session ID |
+| `turns` | RewindTurn[] | 可回退的对话轮次列表 |
+
+**RewindTurn 结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `index` | number | 轮次序号（0-based，对应 transcript 行号） |
+| `role` | `"User"` \| `"Assistant"` | 轮次角色 |
+| `summary` | string | 轮次摘要文本 |
+
+**客户端响应**：选中某轮后发送 `{ type: "rewind_select", interactionId, sessionId, turnIndex }`，取消发送 `{ type: "rewind_cancel", interactionId, sessionId }`。
+
+---
+
+## 命令列表消息
+
+### commands_list
+
+**发送时机**：客户端连接时（GatewayConnected 中携带）、客户端发送 `refresh_commands` 后、命令目录变化时主动推送。
+
+```json
+{
+  "type": "commands_list",
+  "commands": [
+    { "name": "/rewind", "description": "恢复到之前的对话位置", "requiresArgs": true },
+    { "name": "/compact", "description": "压缩上下文", "requiresArgs": false },
+    { "name": "/clear", "description": "清除当前会话", "requiresArgs": false }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `commands` | CommandItem[] | 可用命令列表 |
+
+**CommandItem 结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | string | 命令名，如 `"/rewind"`、`"/compact"` |
+| `description` | string | 中文描述 |
+| `requiresArgs` | boolean | 是否需要参数，决定选中后是否自动发送 |
+
+**数据来源**：Gateway 自动扫描 `~/.claude/skills/`、`~/.claude/commands/`、`~/.claude/plugins/cache/` 等目录，提取命令名和描述。
+
+**GatewayConnected 中也包含**：初次连接时 `commands` 字段随 `connected` 消息一起发送，客户端可立即渲染命令面板。
 
 ---
 
@@ -877,6 +1016,7 @@ SessionStart (event)         ← 展示 session 头部
 | `type: "assistant"` + tool_use block | 工具调用卡片（显示工具名 + 简要参数） |
 | `type: "user"` + tool_result block | 工具结果卡片（`isError` 时红色；内容截断，可展开） |
 | `type: "user"` + text block | 用户输入气泡（右对齐） |
+| commandMeta 存在 | 命令执行提示（如 "已执行 /compact" 小字标记） |
 
 ### event 类型 → UI 组件
 
@@ -893,3 +1033,5 @@ SessionStart (event)         ← 展示 session 头部
 | `ConfigChange` / `CwdChanged` | 可选：系统小字提示 |
 | `TaskCreated` / `TaskCompleted` | 任务进度内联卡片 |
 | `Elicitation` | 问题输入框（takeover 模式） |
+| `rewind_selector` | 回退轮次选择器（列表 + 确认/取消按钮） |
+| `commands_list` | 命令面板/快捷菜单 |

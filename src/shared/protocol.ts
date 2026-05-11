@@ -117,6 +117,12 @@ export interface TranscriptBlock {
   isError?: boolean;
 }
 
+/** 解析后的 local command XML 元信息子项 */
+export interface CommandMetaItem {
+  type: 'command_name' | 'command_message' | 'command_args' | 'stdout' | 'stderr' | 'caveat' | 'system_reminder';
+  content: string;
+}
+
 export interface TranscriptEntry {
   /** Line index in transcript file, for dedup */
   index: number;
@@ -125,6 +131,8 @@ export interface TranscriptEntry {
   model?: string;
   usage?: TokenUsage;
   blocks: TranscriptBlock[];
+  /** 从 local command XML 标签中解析出的元信息（仅 user 类型条目可能出现） */
+  commandMeta?: CommandMetaItem[];
 }
 
 // ── Hook event payload ──
@@ -157,26 +165,6 @@ export interface SessionMessage {
 // ── Gateway mode ──
 
 export type GatewayMode = 'bystander' | 'takeover';
-
-// ── Session activity ──
-
-export type SessionActivityStatus = 'idle' | 'processing';
-
-export interface SessionActivity {
-  type: 'session_activity';
-  sessionId: string;
-  status: SessionActivityStatus;
-  prompt?: string;
-  timestamp: number;
-}
-
-export function makeSessionActivity(sessionId: string, prompt?: string): SessionActivity {
-  return { type: 'session_activity', sessionId, status: 'processing', prompt, timestamp: Date.now() };
-}
-
-export function makeSessionIdle(sessionId: string): SessionActivity {
-  return { type: 'session_activity', sessionId, status: 'idle', timestamp: Date.now() };
-}
 
 // ── WebSocket protocol: Gateway -> Frontend ──
 
@@ -233,8 +221,7 @@ export type GatewayMessage =
   | { type: 'directories_list'; items: DirectoryItem[] }
   | { type: 'validate_path_result'; path: string; ok: boolean; error?: string }
   | { type: 'rewind_selector'; interactionId: string; sessionId: string; turns: RewindTurn[] }
-  | { type: 'commands_list'; commands: CommandItem[] }
-  | SessionActivity;
+  | { type: 'commands_list'; commands: CommandItem[] };
 
 // ── WebSocket protocol: Frontend -> Gateway ──
 

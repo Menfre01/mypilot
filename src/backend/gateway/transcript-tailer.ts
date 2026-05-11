@@ -1,6 +1,7 @@
 import { watch, type FSWatcher, closeSync, openSync, readSync, statSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { parseEntries, classifyEntry, parseTimestamp } from './transcript-reader.js';
+import type { ParsedEntry } from './transcript-reader.js';
 import type { SessionMessage } from '../../shared/protocol.js';
 import type { TailerStateStore } from './tailer-state-store.js';
 
@@ -44,6 +45,26 @@ export class TranscriptTailer {
     this.pollIntervalMs = options?.pollIntervalMs ?? 1000;
     this.catchUpRetryDelaysMs = options?.catchUpRetryDelaysMs ?? [200, 400, 800, 1600, 3200];
     this.stateStore = options?.stateStore;
+  }
+
+  private _buildMessage(rawEntry: Record<string, unknown>, parsed: ParsedEntry): { msg: SessionMessage; entryIndex: number } {
+    const entryIndex = typeof rawEntry.index === 'number' ? rawEntry.index : this.lastReadIndex;
+    const msg: SessionMessage = {
+      sessionId: this.sessionId,
+      seq: this.nextSeqFn(),
+      timestamp: parseTimestamp(rawEntry.timestamp),
+      source: 'transcript',
+      entry: {
+        index: entryIndex,
+        type: rawEntry.type as 'assistant' | 'user',
+        timestamp: parseTimestamp(rawEntry.timestamp),
+        model: parsed.model,
+        usage: parsed.usage,
+        blocks: parsed.blocks,
+        commandMeta: parsed.commandMeta,
+      },
+    };
+    return { msg, entryIndex };
   }
 
   get stopped(): boolean {
@@ -195,24 +216,7 @@ export class TranscriptTailer {
           const parsed = classifyEntry(rawEntry);
           if (!parsed) continue;
 
-          const entryIndex = typeof rawEntry.index === 'number'
-            ? rawEntry.index
-            : this.lastReadIndex;
-
-          const msg: SessionMessage = {
-            sessionId: this.sessionId,
-            seq: this.nextSeqFn(),
-            timestamp: parseTimestamp(rawEntry.timestamp),
-            source: 'transcript',
-            entry: {
-              index: entryIndex,
-              type: rawEntry.type as 'assistant' | 'user',
-              timestamp: parseTimestamp(rawEntry.timestamp),
-              model: parsed.model,
-              usage: parsed.usage,
-              blocks: parsed.blocks,
-            },
-          };
+          const { msg, entryIndex } = this._buildMessage(rawEntry, parsed);
 
           try { this.onPush(msg); } catch (err) { console.error('[TranscriptTailer] onPush error: %s', err instanceof Error ? err.message : err); }
           this.lastReadIndex = entryIndex + 1;
@@ -253,21 +257,7 @@ export class TranscriptTailer {
           for (const rawEntry of entries) {
             const parsed = classifyEntry(rawEntry);
             if (!parsed) continue;
-            const entryIndex = typeof rawEntry.index === 'number' ? rawEntry.index : this.lastReadIndex;
-            const msg: SessionMessage = {
-              sessionId: this.sessionId,
-              seq: this.nextSeqFn(),
-              timestamp: parseTimestamp(rawEntry.timestamp),
-              source: 'transcript',
-              entry: {
-                index: entryIndex,
-                type: rawEntry.type as 'assistant' | 'user',
-                timestamp: parseTimestamp(rawEntry.timestamp),
-                model: parsed.model,
-                usage: parsed.usage,
-                blocks: parsed.blocks,
-              },
-            };
+            const { msg, entryIndex } = this._buildMessage(rawEntry, parsed);
             try { this.onPush(msg); } catch (err) { console.error('[TranscriptTailer] onPush error: %s', err instanceof Error ? err.message : err); }
             this.lastReadIndex = entryIndex + 1;
           }
@@ -286,21 +276,7 @@ export class TranscriptTailer {
         const rawEntry = JSON.parse(this.partialLine);
         const parsed = classifyEntry(rawEntry);
         if (parsed) {
-          const entryIndex = typeof rawEntry.index === 'number' ? rawEntry.index : this.lastReadIndex;
-          const msg: SessionMessage = {
-            sessionId: this.sessionId,
-            seq: this.nextSeqFn(),
-            timestamp: parseTimestamp(rawEntry.timestamp),
-            source: 'transcript',
-            entry: {
-              index: entryIndex,
-              type: rawEntry.type as 'assistant' | 'user',
-              timestamp: parseTimestamp(rawEntry.timestamp),
-              model: parsed.model,
-              usage: parsed.usage,
-              blocks: parsed.blocks,
-            },
-          };
+          const { msg } = this._buildMessage(rawEntry, parsed);
           try { this.onPush(msg); } catch (err) { console.error('[TranscriptTailer] onPush error: %s', err instanceof Error ? err.message : err); }
         }
       } catch {

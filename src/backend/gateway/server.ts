@@ -100,6 +100,11 @@ export function createServer(
     ? new PushService(pushConfig.relayUrl, pushConfig.apiKey, pushConfig.gatewayId)
     : undefined;
 
+  // 预热 Worker，避免首次推送因冷启动超时（fire-and-forget，不阻塞启动）
+  if (pushService) {
+    pushService.warmup();
+  }
+
   function persistState(): void {
     const devices = deviceStore.getAll()
       .filter(d => d.pushToken)

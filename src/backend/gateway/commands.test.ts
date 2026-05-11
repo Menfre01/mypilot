@@ -28,18 +28,17 @@ describe('getAllCommands', () => {
 
   it('returns built-in commands when no skills/plugins/commands exist', () => {
     const commands = getAllCommands();
-    expect(commands.length).toBeGreaterThanOrEqual(11);
+    expect(commands.length).toBeGreaterThanOrEqual(9);
 
     const names = commands.map(c => c.name);
     expect(names).toContain('/clear');
     expect(names).toContain('/compact');
-    expect(names).toContain('/rename');
     expect(names).toContain('/simplify');
     expect(names).toContain('/review');
     expect(names).toContain('/security-review');
     expect(names).toContain('/plan');
     expect(names).toContain('/init');
-    expect(names).toContain('/btw');
+
     expect(names).toContain('/export');
     expect(names).toContain('/insights');
   });
@@ -55,19 +54,6 @@ describe('getAllCommands', () => {
     }
   });
 
-  it('built-in /rename requires args', () => {
-    const commands = getAllCommands();
-    const rename = commands.find(c => c.name === '/rename');
-    expect(rename).toBeDefined();
-    expect(rename!.requiresArgs).toBe(true);
-  });
-
-  it('built-in /btw requires args', () => {
-    const commands = getAllCommands();
-    const btw = commands.find(c => c.name === '/btw');
-    expect(btw).toBeDefined();
-    expect(btw!.requiresArgs).toBe(true);
-  });
 
   it('built-in /review requires args', () => {
     const commands = getAllCommands();

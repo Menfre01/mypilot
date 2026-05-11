@@ -1,5 +1,5 @@
 import { open, stat } from 'node:fs/promises';
-import type { TranscriptEntry, TranscriptBlock, TokenUsage } from '../../shared/protocol.js';
+import type { TranscriptEntry, TranscriptBlock, TokenUsage, CommandMetaItem } from '../../shared/protocol.js';
 
 const TAIL_BYTES = 65536;
 const THINKING_MAX_CHARS = 1000;
@@ -195,12 +195,37 @@ function extractToolResultBlocks(content: Array<Record<string, unknown>>): Trans
   return blocks;
 }
 
-// ── Local command XML detection ──
+// ── Local command XML parsing ──
 
-const LOCAL_COMMAND_TAGS = /^<\/?(?:command-name|command-message|command-args|local-command-caveat)[\s>]/m;
+const LOCAL_COMMAND_TAG_MAP: Record<string, CommandMetaItem['type']> = {
+  'command-name': 'command_name',
+  'command-message': 'command_message',
+  'command-args': 'command_args',
+  'local-command-stdout': 'stdout',
+  'local-command-stderr': 'stderr',
+  'local-command-caveat': 'caveat',
+  'system-reminder': 'system_reminder',
+};
 
-function hasLocalCommandXml(content: string): boolean {
-  return LOCAL_COMMAND_TAGS.test(content);
+const LOCAL_COMMAND_PARSE_RE = new RegExp(
+  `<(${Object.keys(LOCAL_COMMAND_TAG_MAP).join('|')})>([\\s\\S]*?)<\\/\\1>`,
+  'g',
+);
+
+function extractCommandMeta(content: string): { meta: CommandMetaItem[]; remainder: string } {
+  if (!LOCAL_COMMAND_PARSE_RE.test(content)) return { meta: [], remainder: content };
+  LOCAL_COMMAND_PARSE_RE.lastIndex = 0;
+
+  const meta: CommandMetaItem[] = [];
+  const remainder = content.replace(LOCAL_COMMAND_PARSE_RE, (_, tag: string, body: string) => {
+    const type = LOCAL_COMMAND_TAG_MAP[tag];
+    const trimmed = body.trim();
+    if (type && trimmed) {
+      meta.push({ type, content: trimmed });
+    }
+    return '';
+  }).trim();
+  return { meta, remainder };
 }
 
 // ── Entry classification ──
@@ -209,6 +234,7 @@ export interface ParsedEntry {
   blocks: TranscriptBlock[];
   model?: string;
   usage?: TokenUsage;
+  commandMeta?: CommandMetaItem[];
 }
 
 export function classifyEntry(entry: JsonEntry): ParsedEntry | null {
@@ -224,6 +250,7 @@ export function classifyEntry(entry: JsonEntry): ParsedEntry | null {
   const blocks: TranscriptBlock[] = [];
   let model: string | undefined;
   let usage: TokenUsage | undefined;
+  let commandMeta: CommandMetaItem[] | undefined;
 
   if (type === 'assistant') {
     if (!content.length) return null;
@@ -251,21 +278,24 @@ export function classifyEntry(entry: JsonEntry): ParsedEntry | null {
 
     blocks.push(...extractToolResultBlocks(content));
 
-    // message.content 可能是纯字符串（例如 <task-notification> XML），
+    // message.content 可能是纯字符串（例如 local command XML），
     // content blocks 来自数组格式，单独处理字符串 fallback。
-    // 过滤 local command XML（command-name、command-message 等），这些是
-    // Claude Code 执行斜杠命令时产生的内部消息，移动端不需要展示。
+    // 解析 local command XML 标签为结构化元信息，客户端可将其合并到
+    // clash command 的 UserPromptSubmit 展示中。
     if (!blocks.length && typeof msg.content === 'string') {
-      const str = msg.content as string;
-      if (str.trim() && !hasLocalCommandXml(str)) {
-        blocks.push({ type: 'text', text: str.slice(0, TEXT_MAX_CHARS) });
+      const str = (msg.content as string).trim();
+      if (!str) { /* empty, skip */ }
+      else {
+        const { meta, remainder } = extractCommandMeta(str);
+        if (meta.length) commandMeta = meta;
+        if (remainder) blocks.push({ type: 'text', text: remainder.slice(0, TEXT_MAX_CHARS) });
       }
     }
   }
 
-  if (!blocks.length) return null;
+  if (!blocks.length && !commandMeta) return null;
 
-  return { blocks, model, usage };
+  return { blocks, model, usage, commandMeta };
 }
 
 // ── Public API ──
@@ -304,6 +334,7 @@ export async function readTranscript(
       model: parsed.model,
       usage: parsed.usage,
       blocks: parsed.blocks,
+      commandMeta: parsed.commandMeta,
     });
   }
 
@@ -339,6 +370,7 @@ export async function readToolEntry(
           model: parsed.model,
           usage: parsed.usage,
           blocks: parsed.blocks,
+          commandMeta: parsed.commandMeta,
         };
       }
     }
@@ -354,6 +386,7 @@ export async function readToolEntry(
           type: 'user',
           timestamp: parseTimestamp(raw.timestamp),
           blocks: parsed.blocks,
+          commandMeta: parsed.commandMeta,
         };
       }
     }

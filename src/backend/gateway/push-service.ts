@@ -33,6 +33,19 @@ export class PushService {
     this.gatewayId = gatewayId;
   }
 
+  /** 预热 Worker，避免首次推送因冷启动（isolate 初始化 + JWT 签名 + KV 读取）超时 */
+  async warmup(): Promise<void> {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      await fetch(`${this.relayUrl}/api/health`, { signal: controller.signal });
+      clearTimeout(timeout);
+      console.log('[PushService] Worker warmup complete');
+    } catch (err) {
+      console.warn('[PushService] Worker warmup failed (non-fatal):', err instanceof Error ? err.message : err);
+    }
+  }
+
   isAvailable(): boolean {
     if (!this.quotaExceeded) return true;
     const today = new Date().toISOString().slice(0, 10);

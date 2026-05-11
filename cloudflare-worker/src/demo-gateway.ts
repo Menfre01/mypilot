@@ -44,13 +44,12 @@ const PUSH_RELAY_RETRY_INTERVAL = 30_000;
 const DEMO_COMMANDS: CommandItem[] = [
   { name: '/clear', description: 'Start a new conversation with empty context', requiresArgs: false },
   { name: '/compact', description: 'Free up context by summarizing the conversation', requiresArgs: false },
-  { name: '/rename', description: 'Rename the current session', requiresArgs: true },
+
   { name: '/simplify', description: 'Review recent changes for quality and efficiency', requiresArgs: false },
   { name: '/review', description: 'Review a pull request locally', requiresArgs: true },
   { name: '/security-review', description: 'Analyze pending changes for security vulnerabilities', requiresArgs: false },
   { name: '/plan', description: 'Enter plan mode for a complex task', requiresArgs: false },
   { name: '/init', description: 'Initialize project with a CLAUDE.md guide', requiresArgs: false },
-  { name: '/btw', description: 'Ask a quick side question without adding to history', requiresArgs: true },
   { name: '/export', description: 'Export the current conversation as plain text', requiresArgs: true },
   { name: '/insights', description: 'Generate report analyzing your Claude Code sessions', requiresArgs: false },
 ];

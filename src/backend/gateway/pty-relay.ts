@@ -37,7 +37,7 @@ export function createPtyRelay(
 
         let resolvedSessionId: string;
         if (rawSessionId === 'last') {
-          const last = processManager.getMostRecentSession();
+          const last = processManager.getMostRecentSession('mobile');
           if (!last) {
             ws.send(JSON.stringify({ type: 'pty_error', message: 'No active sessions' }));
             ws.close();

@@ -60,6 +60,7 @@ export function adaptStreamJsonLine(
           model: parsed.model,
           usage: parsed.usage,
           blocks: parsed.blocks,
+          commandMeta: parsed.commandMeta,
         },
       };
     }

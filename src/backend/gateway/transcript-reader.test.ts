@@ -133,7 +133,7 @@ describe('transcript-reader', () => {
       expect(textBlock.text).toContain('Background command');
     });
 
-    it('skips local command XML entries (command-name, command-message, command-args)', async () => {
+    it('parses local command XML entries (command-name, command-message) into commandMeta', async () => {
       const path = setupTranscript([
         makeTranscriptLine({
           type: 'user',
@@ -144,10 +144,22 @@ describe('transcript-reader', () => {
       ]);
 
       const result = await readTranscript(path);
-      expect(result.entries).toHaveLength(0);
+      expect(result.entries).toHaveLength(1);
+      const entry = result.entries[0];
+      expect(entry.blocks).toHaveLength(0);
+      expect(entry.commandMeta).toBeDefined();
+      expect(entry.commandMeta!).toHaveLength(2);
+
+      const cmdName = entry.commandMeta!.find(m => m.type === 'command_name')!;
+      expect(cmdName).toBeDefined();
+      expect(cmdName.content).toBe('/clear');
+
+      const cmdMsg = entry.commandMeta!.find(m => m.type === 'command_message')!;
+      expect(cmdMsg).toBeDefined();
+      expect(cmdMsg.content).toBe('clear');
     });
 
-    it('skips local command XML entries (command-message first, different order)', async () => {
+    it('parses local command XML (command-message first, different order) into commandMeta', async () => {
       const path = setupTranscript([
         makeTranscriptLine({
           type: 'user',
@@ -158,10 +170,17 @@ describe('transcript-reader', () => {
       ]);
 
       const result = await readTranscript(path);
-      expect(result.entries).toHaveLength(0);
+      expect(result.entries).toHaveLength(1);
+      const entry = result.entries[0];
+      expect(entry.commandMeta).toBeDefined();
+      expect(entry.commandMeta!).toHaveLength(2);
+      expect(entry.commandMeta![0].type).toBe('command_message');
+      expect(entry.commandMeta![0].content).toBe('simplify');
+      expect(entry.commandMeta![1].type).toBe('command_name');
+      expect(entry.commandMeta![1].content).toBe('/simplify');
     });
 
-    it('skips local-command-caveat XML entries', async () => {
+    it('parses local-command-caveat XML into commandMeta', async () => {
       const path = setupTranscript([
         makeTranscriptLine({
           type: 'user',
@@ -172,7 +191,73 @@ describe('transcript-reader', () => {
       ]);
 
       const result = await readTranscript(path);
-      expect(result.entries).toHaveLength(0);
+      expect(result.entries).toHaveLength(1);
+      const entry = result.entries[0];
+      expect(entry.blocks).toHaveLength(0);
+      expect(entry.commandMeta).toBeDefined();
+      expect(entry.commandMeta!).toHaveLength(1);
+      expect(entry.commandMeta![0].type).toBe('caveat');
+      expect(entry.commandMeta![0].content).toContain('Caveat:');
+    });
+
+    it('parses local-command-stdout XML into commandMeta', async () => {
+      const path = setupTranscript([
+        makeTranscriptLine({
+          type: 'user',
+          message: {
+            content: '<local-command-stdout>Compact: summarizing 47 messages...</local-command-stdout>',
+          },
+        }),
+      ]);
+
+      const result = await readTranscript(path);
+      expect(result.entries).toHaveLength(1);
+      const entry = result.entries[0];
+      expect(entry.blocks).toHaveLength(0);
+      expect(entry.commandMeta).toBeDefined();
+      expect(entry.commandMeta!).toHaveLength(1);
+      expect(entry.commandMeta![0].type).toBe('stdout');
+      expect(entry.commandMeta![0].content).toContain('Compact:');
+    });
+
+    it('parses local-command-stderr XML into commandMeta', async () => {
+      const path = setupTranscript([
+        makeTranscriptLine({
+          type: 'user',
+          message: {
+            content: '<local-command-stderr>Error: command not found</local-command-stderr>',
+          },
+        }),
+      ]);
+
+      const result = await readTranscript(path);
+      expect(result.entries).toHaveLength(1);
+      const entry = result.entries[0];
+      expect(entry.blocks).toHaveLength(0);
+      expect(entry.commandMeta).toBeDefined();
+      expect(entry.commandMeta!).toHaveLength(1);
+      expect(entry.commandMeta![0].type).toBe('stderr');
+      expect(entry.commandMeta![0].content).toBe('Error: command not found');
+    });
+
+    it('parses system-reminder XML into commandMeta', async () => {
+      const path = setupTranscript([
+        makeTranscriptLine({
+          type: 'user',
+          message: {
+            content: '<system-reminder>This is a system reminder.</system-reminder>',
+          },
+        }),
+      ]);
+
+      const result = await readTranscript(path);
+      expect(result.entries).toHaveLength(1);
+      const entry = result.entries[0];
+      expect(entry.blocks).toHaveLength(0);
+      expect(entry.commandMeta).toBeDefined();
+      expect(entry.commandMeta!).toHaveLength(1);
+      expect(entry.commandMeta![0].type).toBe('system_reminder');
+      expect(entry.commandMeta![0].content).toBe('This is a system reminder.');
     });
 
     it('skips user entry with empty string content', async () => {

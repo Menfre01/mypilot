@@ -7,7 +7,6 @@ const BUILTIN_COMMANDS: CommandItem[] = [
   // ── 会话管理 ──
   { name: '/clear', description: 'Start a new conversation with empty context', requiresArgs: false },
   { name: '/compact', description: 'Free up context by summarizing the conversation', requiresArgs: false },
-  { name: '/rename', description: 'Rename the current session', requiresArgs: true },
 
   // ── 代码操作 ──
   { name: '/simplify', description: 'Review recent changes for quality and efficiency', requiresArgs: false },
@@ -17,7 +16,7 @@ const BUILTIN_COMMANDS: CommandItem[] = [
   // ── 工作流 ──
   { name: '/plan', description: 'Enter plan mode for a complex task', requiresArgs: false },
   { name: '/init', description: 'Initialize project with a CLAUDE.md guide', requiresArgs: false },
-  { name: '/btw', description: 'Ask a quick side question without adding to history', requiresArgs: true },
+
   { name: '/export', description: 'Export the current conversation as plain text', requiresArgs: true },
 
   // ── 诊断 ──
