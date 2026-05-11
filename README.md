@@ -4,7 +4,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-[Claude Code](https://code.claude.com) 移动端远程交互控制台 [MyPilot](https://apps.apple.com/hk/app/mypilot/id6762133874) 的网关服务。
+[Claude Code](https://code.claude.com) 的第三方手机客户端 [MyPilot](https://apps.apple.com/hk/app/mypilot/id6762133874) 网关服务。
 
 中文 | [English](README.en.md)
 </div>
@@ -24,7 +24,7 @@
   <strong>Android APK</strong>
 </p>
 
-MyPilot 接收 Claude Code 的 Hook 事件并通过 WebSocket 实时推送到你的手机。在接管模式下，你可以直接在手机上审批权限、回答问题、提交 Prompt。
+MyPilot 是 Claude Code 的第三方手机客户端。在手机上即可查看 Claude Code 运行状态、接收实时事件推送、审批权限、回答提问、提交 Prompt，还可以直接从手机发起新的 Claude Code 会话。
 
 > **Apple Watch 推送** — 无需额外配置，APNs 推送通知自动镜像到配对的 Apple Watch。蜂窝版手表即使远离 iPhone 也能独立接收推送。手腕上的手表让你随时掌握 Claude Code 运行状态。
 
@@ -58,19 +58,118 @@ mypilot init-hooks
 mypilot start
 ```
 
-用手机上的 MyPilot 应用扫描终端中显示的二维码。二维码包含网关地址和加密密钥，连接所需的一切信息都在其中。
+用手机上的 MyPilot 应用扫描终端中显示的二维码，完成配对。二维码包含网关地址和加密密钥，连接所需的一切信息都在其中。
+
+配对完成后，手机即可远程操控电脑上的 Claude Code。在 App 中直接发起会话，或在终端通过 `mypilot session` 启动 PTY 会话，详见 [Session 使用指南](#session-使用指南)。
 
 > **提示**：`npm install -g` 如遇权限错误，可改用 `npm install -g mypilot --prefix ~/.local` 或参考 [npm 官方指南](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally)。推送通知在首次启动时自动注册，无需额外配置。
+
+## Session 使用指南
+
+Session 是 MyPilot 连接手机与 Claude Code 的核心单元。每个 Session 代表一个正在运行的 Claude Code 会话，可以在手机 App 和电脑终端之间自由流转。
+
+### 从手机发起 Session
+
+1. 打开 MyPilot App，确认顶部状态灯为绿色（表示已连接到网关）
+2. 确认处于接管模式（App 中切换到接管模式）
+3. 点击右下角【+】按钮，选择工作目录，可填写可选的会话名称，点击开始 —— Claude Code 在电脑后台启动
+4. 新会话将出现在会话列表界面，点击进入后即可输入 Prompt 开始任务
+
+### 在终端查看 Session
+
+手机发起的 Session 在后台运行，可以通过终端查看和管理：
+
+```bash
+# 查看所有活跃 Session
+mypilot session ls
+```
+
+输出示例：
+
+```
+ID             名称           模式       来源
+────────────── ──────────── ──────── ────────
+a1b2c3d4       my-project    PTY      mobile
+e5f6g7h8       -             PTY      desktop
+```
+
+- **mobile** — 手机端发起的会话
+- **desktop** — 终端通过 `mypilot session` 启动的会话
+
+### 将手机端 Session 流转到终端
+
+手机上开启的 Session 可以随时在终端中接管，交互状态无缝衔接：
+
+```bash
+# 接管最近的 Session（来自手机）
+mypilot session --continue
+
+# 接管指定 shortid 的 Session
+mypilot session --resume a1b2c3d4
+```
+
+接管后终端进入 PTY 交互模式，键盘输入直接发送给 Claude Code。此时手机端同样可以看到实时输出，控制权可在两端之间随时切换（见[工作模式](#工作模式)）。
+
+### 从终端发起 Session 并让手机接管
+
+```bash
+# 在终端中创建新 Session
+mypilot session --name my-project
+```
+
+终端进入 PTY 交互模式后，打开 MyPilot App，切换到接管模式，即可在手机上接管该 Session。交互事件（权限请求、提问等）。
+
+### 结束 Session
+
+三种方式结束一个 Session：
+
+1. **Claude Code TUI 正常退出**：在 PTY 终端中输入 `exit` 退出 Claude Code，Session 自动结束
+2. **终端强制结束**：`mypilot session kill <shortid>` 强制终止指定 Session
+3. **手机端删除**：在 MyPilot App 的会话列表中左滑即可删除
+
+### 实时监视
+
+```bash
+# 实时查看 Session 列表变化
+mypilot session ls -w
+```
+
+该命令会持续刷新 Session 列表，适合在终端中观察手机端的操作动态。
+
+## 工作模式
+
+### 旁观模式（默认）
+
+可以实时查看 Session 的消息流和运行状态，但不能输入 Prompt，也不能主动创建 Session。
+
+### 接管模式
+
+获得 Claude Code Session 的完整交互能力：输入 Prompt、回答问题、审批权限、主动发起新会话等。
+
+多台设备同时连接时，接管权互斥——同一时间只有一个设备能持有接管权。其他设备发起接管时会自动抢占，原设备回到旁观模式。
+
+### 终端与手机切换
+
+Claude Code 会话可以从终端或手机任意一端发起，并随时切换控制权：
+
+- **手机发起**：在 MyPilot 应用中直接创建新会话，Claude Code 在电脑后台运行，手机作为主控端
+- **终端发起**：运行 `mypilot session`，终端进入 PTY 模式，直接与 Claude Code 交互
+- **切换到手机**：在 MyPilot 应用中切换到接管模式，交互事件（如权限请求）改为在手机上等待响应，并且手机可以主动发起会话和输入 prompt
+- **切换到终端**：执行 `mypilot session --resume <shortid>` 在终端中接管指定会话，当前交互状态无缝衔接
+- **终端断开**：输入 `exit` 断开 PTY 连接，手机端也会响应退出
+- **手机退出**：手机 session 列表左滑删除会话，终端也会响应退出
 
 ## 架构
 
 ```
-Claude Code ──(command hook / curl)──▶ 网关 (:16321) ──(AES-256-GCM WebSocket)──▶ MyPilot App (设备 A)
-                                        │  ├── POST /hook         ← Hook 事件接口       └──▶ MyPilot App (设备 B)
-                                        │  ├── GET  /pair         ← 密钥验证
-                                        │  └── WS   /ws-gateway   ← 加密 WebSocket（多设备）
-                                        │
-                                        └──▶ Push Relay ──(APNs)──▶ MyPilot App（iPhone / Apple Watch 推送通知）
+                                        POST /hook         ← Hook 事件
+Claude Code ──(Hook / curl)──▶          GET  /pair         ← 密钥验证
+                                        GET  /sessions     ← Session 列表（CLI）
+Claude Code ──(PTY spawn)──▶  ── 网关 (:16321) ── WS /ws-gateway  ──▶ MyPilot App（加密 WebSocket，多设备）
+                               │       WS  /pty-relay     ← PTY 中继（终端）
+电脑终端 ──(mypilot session)──▶│
+                               │
+                               └──▶ Push Relay ──(APNs)──▶ MyPilot App（推送通知 / Apple Watch）
 ```
 
 网关与 MyPilot 应用之间的所有 WebSocket 通信均使用 **AES-256-GCM** 端到端加密，密钥通过二维码分发。同一密钥同时用于连接认证和消息加密，无需单独的 Token。
@@ -115,6 +214,15 @@ mypilot link disable <id>              # 禁用连接
 mypilot push status                    # 查看推送通知状态
 mypilot push setup <relay-url> <api-key>  # 配置推送通知
 mypilot push disable                   # 禁用推送通知
+mypilot session                        # 创建新 session
+mypilot session --name <name>          # 创建命名 session
+mypilot session --cwd <path>           # 指定工作目录
+mypilot session --model <model>        # 指定模型
+mypilot session --continue             # 恢复最近的 session
+mypilot session --resume <shortid>     # 按 shortid 恢复 session
+mypilot session kill <shortid>         # 终止 session
+mypilot session ls                     # 列出所有活跃 session
+mypilot session ls -w                  # 实时监视 session 列表
 ```
 
 ## Hook 配置
@@ -219,18 +327,6 @@ mypilot push disable                   # 禁用推送通知
 
 </details>
 
-## 工作模式
-
-### 旁观模式（默认）
-
-所有 Hook 事件实时推送到应用，事件立即返回 `{}`，不影响 Claude Code 运行。
-
-### 接管模式
-
-需要用户交互的事件（PermissionRequest、Stop、Elicitation）会阻塞，等待你在 MyPilot 应用中响应。断开连接后自动恢复为旁观模式。
-
-多台设备同时连接时，接管权互斥——同一时间只有一个设备能持有接管权。其他设备发起接管时会自动抢占，原设备回到旁观模式。
-
 ## 配对
 
 如需重新获取二维码（例如换了手机或应用已关闭），运行：
@@ -300,7 +396,8 @@ npm run docker:restart   # 重新构建并重启
 ├── links.json       # 通信链接配置
 ├── gateway-state.json  # 网关状态（模式、接管权、设备）
 └── logs/
-    └── events-YYYY-MM-DD.jsonl   # 按天存储的事件日志
+    ├── events-YYYY-MM-DD.jsonl         # 按天存储的事件日志
+    └── session-<id>-YYYY-MM-DD.jsonl   # 按 session 存储的消息日志
 ```
 
 ## 许可证
